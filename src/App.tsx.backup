@@ -1,0 +1,3592 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import axios from 'axios';
+import ReactECharts from 'echarts-for-react';
+
+const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
+
+// Savitzky-Golay平滑滤波函数
+const savitzkyGolayFilter = (data: number[], windowSize: number = 5, order: number = 2): number[] => {
+  if (data.length < windowSize) return data;
+  
+  const result: number[] = [];
+  const halfWindow = Math.floor(windowSize / 2);
+  
+  for (let i = 0; i < data.length; i++) {
+    let sum = 0;
+    let weightSum = 0;
+    
+    for (let j = -halfWindow; j <= halfWindow; j++) {
+      const idx = i + j;
+      if (idx >= 0 && idx < data.length) {
+        // 简化的权重计算（实际应用中可以使用更精确的Savitzky-Golay系数）
+        const weight = Math.exp(-(j * j) / (2 * halfWindow * halfWindow));
+        sum += data[idx] * weight;
+        weightSum += weight;
+      }
+    }
+    
+    result.push(sum / weightSum);
+  }
+  
+  return result;
+};
+
+// Z-score归一化函数
+const zScoreNormalization = (data: (number | null)[]): (number | null)[] => {
+  // 过滤掉null值
+  const validData = data.filter(d => d !== null) as number[];
+  if (validData.length === 0) return data;
+  
+  // 计算均值和标准差
+  const mean = validData.reduce((sum, val) => sum + val, 0) / validData.length;
+  const variance = validData.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / validData.length;
+  const stdDev = Math.sqrt(variance);
+  
+  if (stdDev === 0) return data; // 避免除零错误
+  
+  // 应用Z-score归一化
+  return data.map(val => val === null ? null : (val - mean) / stdDev);
+};
+
+
+
+// 综合分析数据处理函数 - 使用相对变化率标准化
+const processComprehensiveData = (originalAreas: any[], referenceC2C4: number) => {
+  // 提取需要处理的数据
+  const dataToProcess = {
+    bolus_pharynx_overlap: originalAreas.map(a => a.bolus_pharynx_overlap),
+    bolus_vestibule_overlap: originalAreas.map(a => a.bolus_vestibule_overlap),
+    pharynx: originalAreas.map(a => a.pharynx),
+    vestibule: originalAreas.map(a => a.vestibule),
+    bolus: originalAreas.map(a => a.bolus || 0),
+    hyoid_c4_distance: originalAreas.map(a => a.hyoid_c4_distance),
+    ues_length: originalAreas.map(a => a.ues_length),
+    c2c4_length: originalAreas.map(a => a.c2c4_length),
+    hyoid_relative_x: originalAreas.map(a => a.hyoid_relative_x),
+    hyoid_relative_y: originalAreas.map(a => a.hyoid_relative_y)
+  };
+
+  // 应用Savitzky-Golay平滑（2阶）
+  const smoothedData = {
+    bolus_pharynx_overlap: savitzkyGolayFilter(dataToProcess.bolus_pharynx_overlap, 5, 2),
+    bolus_vestibule_overlap: savitzkyGolayFilter(dataToProcess.bolus_vestibule_overlap, 5, 2),
+    pharynx: savitzkyGolayFilter(dataToProcess.pharynx, 5, 2),
+    vestibule: savitzkyGolayFilter(dataToProcess.vestibule, 5, 2),
+    bolus: savitzkyGolayFilter(dataToProcess.bolus, 5, 2),
+    hyoid_c4_distance: savitzkyGolayFilter(dataToProcess.hyoid_c4_distance.filter(d => d !== null), 5, 2),
+    ues_length: savitzkyGolayFilter(dataToProcess.ues_length.filter(d => d !== null), 5, 2),
+    c2c4_length: savitzkyGolayFilter(dataToProcess.c2c4_length.filter(d => d !== null && d > 0), 5, 2),
+    hyoid_relative_x: savitzkyGolayFilter(dataToProcess.hyoid_relative_x.filter(d => d !== null), 5, 2),
+    hyoid_relative_y: savitzkyGolayFilter(dataToProcess.hyoid_relative_y.filter(d => d !== null), 5, 2)
+  };
+
+  // 归一化处理
+  const normalizedData = originalAreas.map((area, index) => {
+    const c2c4Length = smoothedData.c2c4_length[index] || area.c2c4_length;
+    if (!c2c4Length || c2c4Length <= 0) {
+      return {
+        frame: index,
+        smoothed_bolus_pharynx_overlap: smoothedData.bolus_pharynx_overlap[index],
+        smoothed_bolus_vestibule_overlap: smoothedData.bolus_vestibule_overlap[index],
+        smoothed_pharynx: smoothedData.pharynx[index],
+        smoothed_vestibule: smoothedData.vestibule[index],
+        smoothed_bolus: smoothedData.bolus[index],
+        smoothed_hyoid_relative_x: smoothedData.hyoid_relative_x[index],
+        smoothed_hyoid_relative_y: smoothedData.hyoid_relative_y[index],
+        normalized_bolus_pharynx_overlap: null,
+        normalized_bolus_vestibule_overlap: null,
+        normalized_pharynx: null,
+        normalized_vestibule: null,
+        normalized_bolus: null,
+        normalized_hyoid_c4_distance: null,
+        normalized_ues_length: null,
+        normalized_hyoid_relative_x: null,
+        normalized_hyoid_relative_y: null,
+        relative_change_bolus_pharynx_overlap: null,
+        relative_change_bolus_vestibule_overlap: null,
+        relative_change_pharynx: null,
+        relative_change_vestibule: null,
+        relative_change_bolus: null,
+        relative_change_hyoid_c4_distance: null,
+        relative_change_ues_length: null,
+        relative_change_hyoid_relative_x: null,
+        relative_change_hyoid_relative_y: null
+      };
+    }
+    
+    const scaleFactor = referenceC2C4 / c2c4Length;
+    const scaleFactorSquared = scaleFactor * scaleFactor;
+    
+    return {
+      frame: index,
+      smoothed_bolus_pharynx_overlap: smoothedData.bolus_pharynx_overlap[index],
+      smoothed_bolus_vestibule_overlap: smoothedData.bolus_vestibule_overlap[index],
+      smoothed_pharynx: smoothedData.pharynx[index],
+      smoothed_vestibule: smoothedData.vestibule[index],
+      smoothed_bolus: smoothedData.bolus[index],
+      // 面积归一化（线性关系）
+      normalized_bolus_pharynx_overlap: smoothedData.bolus_pharynx_overlap[index] * scaleFactor,
+      normalized_bolus_vestibule_overlap: smoothedData.bolus_vestibule_overlap[index] * scaleFactor,
+      normalized_pharynx: smoothedData.pharynx[index] * scaleFactor,
+      normalized_vestibule: smoothedData.vestibule[index] * scaleFactor,
+      normalized_bolus: smoothedData.bolus[index] * scaleFactor,
+      // 距离归一化（平方关系）
+      normalized_hyoid_c4_distance: smoothedData.hyoid_c4_distance[index] !== null 
+        ? smoothedData.hyoid_c4_distance[index] * scaleFactorSquared 
+        : null,
+      normalized_ues_length: smoothedData.ues_length[index] !== null 
+        ? smoothedData.ues_length[index] * scaleFactorSquared 
+        : null,
+      // hyoid相对坐标归一化（平方关系）
+      normalized_hyoid_relative_x: smoothedData.hyoid_relative_x[index] !== null 
+        ? smoothedData.hyoid_relative_x[index] * scaleFactorSquared 
+        : null,
+      normalized_hyoid_relative_y: smoothedData.hyoid_relative_y[index] !== null 
+        ? smoothedData.hyoid_relative_y[index] * scaleFactorSquared 
+        : null,
+      // 相对变化率（将在下面计算）
+      relative_change_bolus_pharynx_overlap: null,
+      relative_change_bolus_vestibule_overlap: null,
+      relative_change_pharynx: null,
+      relative_change_vestibule: null,
+      relative_change_bolus: null,
+      relative_change_hyoid_c4_distance: null,
+      relative_change_ues_length: null,
+      relative_change_hyoid_relative_x: null,
+      relative_change_hyoid_relative_y: null
+    };
+  });
+
+  // 计算相对变化率（相对于每个参数的均值）
+  const parameterNames = [
+    'normalized_bolus_pharynx_overlap', 'normalized_bolus_vestibule_overlap',
+    'normalized_pharynx', 'normalized_vestibule', 'normalized_bolus',
+    'normalized_hyoid_c4_distance', 'normalized_ues_length',
+    'normalized_hyoid_relative_x', 'normalized_hyoid_relative_y'
+  ];
+
+  // 计算每个参数的均值
+  const parameterMeans: { [key: string]: number } = {};
+  parameterNames.forEach(paramName => {
+    const values = normalizedData.map((row: any) => row[paramName]).filter((v: any) => v !== null);
+    if (values.length > 0) {
+      parameterMeans[paramName] = values.reduce((sum, val) => sum + val, 0) / values.length;
+    }
+  });
+
+  // 计算相对变化率（百分比变化）
+  normalizedData.forEach((row: any) => {
+    parameterNames.forEach(paramName => {
+      const normalizedValue = row[paramName];
+      const mean = parameterMeans[paramName];
+      if (normalizedValue !== null && mean !== undefined && mean !== 0) {
+        const relativeChangeParamName = paramName.replace('normalized_', 'relative_change_');
+        row[relativeChangeParamName] = ((normalizedValue - mean) / mean) * 100; // 转换为百分比
+      }
+    });
+  });
+
+  return {
+    reference: referenceC2C4,
+    processedData: normalizedData,
+    parameterMeans: parameterMeans,
+    parameterCount: parameterNames.length
+  };
+};
+
+// Z-score数据处理函数
+const processZScoreData = (comprehensiveData: any) => {
+  if (!comprehensiveData || !comprehensiveData.processedData) return null;
+  
+  const processedData = comprehensiveData.processedData;
+  
+  // 提取所有normalized_字段进行Z-score归一化
+  const zScoreData = processedData.map((row: any) => {
+    // 应用Z-score归一化到所有normalized字段
+    const zScoreFields = {
+      zscore_bolus_pharynx_overlap: zScoreNormalization([row.normalized_bolus_pharynx_overlap])[0],
+      zscore_bolus_vestibule_overlap: zScoreNormalization([row.normalized_bolus_vestibule_overlap])[0],
+      zscore_pharynx: zScoreNormalization([row.normalized_pharynx])[0],
+      zscore_vestibule: zScoreNormalization([row.normalized_vestibule])[0],
+      zscore_bolus: zScoreNormalization([row.normalized_bolus])[0],
+      zscore_hyoid_c4_distance: zScoreNormalization([row.normalized_hyoid_c4_distance])[0],
+      zscore_ues_length: zScoreNormalization([row.normalized_ues_length])[0],
+      zscore_hyoid_relative_x: zScoreNormalization([row.normalized_hyoid_relative_x])[0],
+      zscore_hyoid_relative_y: zScoreNormalization([row.normalized_hyoid_relative_y])[0]
+    };
+    
+    return {
+      ...row,
+      ...zScoreFields
+    };
+  });
+  
+  return {
+    reference: comprehensiveData.reference,
+    processedData: zScoreData,
+    zScoreData: zScoreData
+  };
+};
+
+type JobStatus = 'pending' | 'running' | 'done' | 'error';
+
+type PreviewItem = {
+  frame_index: number;
+  mask_url: string;
+  overlay_url?: string;
+  // 新增：特殊时刻帧信息
+  frame_name?: string;  // 帧的命名
+  is_special_moment?: boolean;  // 是否为特殊时刻帧
+};
+
+type Summary = {
+  frames: number;
+  num_classes: number;
+  per_class_total: number[];
+  per_class_avg: number[];
+  preview: PreviewItem[];
+  signals?: {
+    areas: Array<{ 
+      pharynx: number; 
+      vestibule: number; 
+      bolus: number;
+      // 新增：bolus重叠面积
+      bolus_pharynx_overlap: number;
+      bolus_vestibule_overlap: number;
+      // 新增：相对坐标参数
+      c2c4_length: number | null;
+      hyoid_relative_x: number | null;
+      hyoid_relative_y: number | null;
+      hyoid_c4_distance: number | null;
+      ues_length: number | null;
+      coordinate_system_valid: boolean;
+      // 新增：bolus流动线参数
+      bolus_front_x: number | null;
+      bolus_front_y: number | null;
+      bolus_back_x: number | null;
+      bolus_back_y: number | null;
+      bolus_track_length: number | null;
+      bolus_track_valid: boolean;
+    }>;
+    points: Array<{
+      UESout?: { x: number; y: number; p: number } | null;
+      UESin?: { x: number; y: number; p: number } | null;
+      C2?: { x: number; y: number; p: number } | null;
+      C4?: { x: number; y: number; p: number } | null;
+      hyoid?: { x: number; y: number; p: number } | null;
+    }>;
+  };
+  // 新增：视频帧率信息
+  fps?: number;
+};
+
+function App() {
+  const [file, setFile] = useState<File | null>(null);
+  const [polyThresh, setPolyThresh] = useState<number>(0.5);
+  const [pointThresh, setPointThresh] = useState<number>(0.5);
+  const [pointRadius, setPointRadius] = useState<number>(6);
+
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
+  const [summary, setSummary] = useState<Summary | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [showNormalized, setShowNormalized] = useState(true); // 新增：控制是否显示归一化数据
+
+  const [showZScoreAnalysis, setShowZScoreAnalysis] = useState(false); // 新增：控制是否显示Z-score分析
+  const [zScoreData, setZScoreData] = useState<any>(null); // 新增：存储Z-score分析数据
+  const [processingZScore, setProcessingZScore] = useState(false); // 新增：Z-score分析处理状态
+  const [showComprehensiveAnalysis, setShowComprehensiveAnalysis] = useState(false); // 新增：控制是否显示综合分析
+  const [comprehensiveData, setComprehensiveData] = useState<any>(null); // 新增：存储综合分析数据
+  const [processingComprehensive, setProcessingComprehensive] = useState(false); // 新增：综合分析处理状态
+  const [analysisProgress, setAnalysisProgress] = useState<number>(0); // 新增：分析进度
+  const pollTimer = useRef<number | null>(null);
+
+  const overlayBase = useMemo(() => (jobId ? `${BACKEND}/jobs/${jobId}/frames` : ''), [jobId]);
+
+  const onSubmit = async () => {
+    if (!file) {
+      alert('请选择视频文件');
+      return;
+    }
+    try {
+      setSubmitting(true);
+      setAnalysisProgress(0);
+      setSummary(null);
+      setJobId(null);
+      setJobStatus(null);
+
+      setShowZScoreAnalysis(false); // 重置Z-score分析状态
+      setZScoreData(null);
+      setShowComprehensiveAnalysis(false); // 重置综合分析状态
+      setComprehensiveData(null);
+
+      const form = new FormData();
+      form.append('file', file, file.name);
+
+      const url = `${BACKEND}/analyze_video/?save_overlays=true&poly_thresh=${polyThresh}&point_thresh=${pointThresh}&point_radius=${pointRadius}`;
+      const resp = await axios.post(url, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      
+      const { job_id } = resp.data;
+      setJobId(job_id);
+      setJobStatus('pending');
+      
+    } catch (e: any) {
+      console.error(e);
+      alert('提交失败，请检查后端是否启动以及参数是否正确');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!jobId) return;
+
+    let startTime = Date.now();
+    let progressInterval: number | null = null;
+
+    const poll = async () => {
+      try {
+        const s = await axios.get(`${BACKEND}/jobs/${jobId}/status`);
+        const st: JobStatus = s.data.status;
+        setJobStatus(st);
+        
+        if (st === 'running') {
+          // 在running状态时，模拟分析进度
+          if (!progressInterval) {
+            progressInterval = window.setInterval(() => {
+              const elapsed = Date.now() - startTime;
+              // 假设分析需要30-60秒，根据实际情况调整
+              const estimatedTotal = 45000; // 45秒
+              const progress = Math.min(Math.round((elapsed / estimatedTotal) * 100), 95);
+              setAnalysisProgress(progress);
+            }, 500);
+          }
+        } else if (st === 'done') {
+          // 分析完成
+          setAnalysisProgress(100);
+          if (progressInterval) {
+            clearInterval(progressInterval);
+            progressInterval = null;
+          }
+          
+          // 取结果
+          const r = await axios.get(`${BACKEND}/jobs/${jobId}/result`);
+          setSummary(r.data.summary);
+          if (pollTimer.current) {
+            window.clearInterval(pollTimer.current);
+            pollTimer.current = null;
+          }
+          
+          // 延迟重置进度条
+          setTimeout(() => {
+            setAnalysisProgress(0);
+          }, 2000);
+          
+        } else if (st === 'error') {
+          // 分析失败
+          if (progressInterval) {
+            clearInterval(progressInterval);
+            progressInterval = null;
+          }
+          setAnalysisProgress(0);
+          
+          if (pollTimer.current) {
+            window.clearInterval(pollTimer.current);
+            pollTimer.current = null;
+          }
+          alert(`任务失败: ${s.data.error || '未知错误'}`);
+        }
+      } catch (e) {
+        console.error(e);
+        if (progressInterval) {
+          clearInterval(progressInterval);
+          progressInterval = null;
+        }
+        setAnalysisProgress(0);
+      }
+    };
+
+    // 立即拉一次，然后每秒轮询
+    poll();
+    pollTimer.current = window.setInterval(poll, 1000);
+
+    return () => {
+      if (pollTimer.current) {
+        window.clearInterval(pollTimer.current);
+        pollTimer.current = null;
+      }
+      if (progressInterval) {
+        clearInterval(progressInterval);
+        progressInterval = null;
+      }
+    };
+  }, [jobId]);
+
+
+
+
+
+  // 处理Z-score分析
+  const handleZScoreAnalysis = async () => {
+    if (!comprehensiveData) {
+      alert('请先完成综合分析');
+      return;
+    }
+
+    try {
+      setProcessingZScore(true);
+      
+      // 处理Z-score数据
+      const processedData = processZScoreData(comprehensiveData);
+      if (processedData) {
+        setZScoreData(processedData);
+        setShowZScoreAnalysis(true);
+        
+        // 生成并下载Z-score CSV
+        generateZScoreCSV(processedData);
+      }
+      
+    } catch (error) {
+      console.error('Z-score分析处理失败:', error);
+      alert('Z-score分析处理失败');
+    } finally {
+      setProcessingZScore(false);
+    }
+  };
+
+  // 处理综合分析
+  const handleComprehensiveAnalysis = async () => {
+    if (!summary?.signals?.areas) {
+      alert('请先完成基础分析');
+      return;
+    }
+
+    try {
+      setProcessingComprehensive(true);
+      
+      // 计算c2c4_length的中值作为reference
+      const validC2C4Lengths = summary.signals.areas
+        .map(area => area.c2c4_length)
+        .filter(length => length !== null && length > 0);
+      
+      if (validC2C4Lengths.length === 0) {
+        alert('没有有效的C2C4长度数据');
+        return;
+      }
+      
+      const sortedLengths = [...validC2C4Lengths].sort((a, b) => a! - b!);
+      const midIndex = Math.floor(sortedLengths.length / 2);
+      const reference = sortedLengths.length % 2 === 0 
+        ? (sortedLengths[midIndex - 1]! + sortedLengths[midIndex]!) / 2
+        : sortedLengths[midIndex]!;
+      
+      // 处理综合分析数据
+      const processedData = processComprehensiveData(summary.signals.areas, reference);
+      setComprehensiveData(processedData);
+      setShowComprehensiveAnalysis(true);
+      
+      // 生成并下载综合分析CSV
+      generateComprehensiveCSV(processedData);
+      
+    } catch (error) {
+      console.error('综合分析处理失败:', error);
+      alert('综合分析处理失败');
+    } finally {
+      setProcessingComprehensive(false);
+    }
+  };
+
+  // 生成综合分析CSV
+  const generateComprehensiveCSV = (data: any) => {
+    const csvContent = [
+      'Frame,Smoothed_bolus_pharynx_overlap,Smoothed_bolus_vestibule_overlap,Smoothed_pharynx,Smoothed_vestibule,Smoothed_bolus,Smoothed_hyoid_relative_x,Smoothed_hyoid_relative_y,Normalized_bolus_pharynx_overlap,Normalized_bolus_vestibule_overlap,Normalized_pharynx,Normalized_vestibule,Normalized_bolus,Normalized_hyoid_c4_distance,Normalized_ues_length,Normalized_hyoid_relative_x,Normalized_hyoid_relative_y,Relative_Change_bolus_pharynx_overlap(%),Relative_Change_bolus_vestibule_overlap(%),Relative_Change_pharynx(%),Relative_Change_vestibule(%),Relative_Change_bolus(%),Relative_Change_hyoid_c4_distance(%),Relative_Change_ues_length(%),Relative_Change_hyoid_relative_x(%),Relative_Change_hyoid_relative_y(%)',
+      ...data.processedData.map((row: any) => [
+        row.frame,
+        row.smoothed_bolus_pharynx_overlap?.toFixed(2) || '',
+        row.smoothed_bolus_vestibule_overlap?.toFixed(2) || '',
+        row.smoothed_pharynx?.toFixed(2) || '',
+        row.smoothed_vestibule?.toFixed(2) || '',
+        row.smoothed_bolus?.toFixed(2) || '',
+        row.smoothed_hyoid_relative_x?.toFixed(2) || '',
+        row.smoothed_hyoid_relative_y?.toFixed(2) || '',
+        row.normalized_bolus_pharynx_overlap?.toFixed(2) || '',
+        row.normalized_bolus_vestibule_overlap?.toFixed(2) || '',
+        row.normalized_pharynx?.toFixed(2) || '',
+        row.normalized_vestibule?.toFixed(2) || '',
+        row.normalized_bolus?.toFixed(2) || '',
+        row.normalized_hyoid_c4_distance?.toFixed(2) || '',
+        row.normalized_ues_length?.toFixed(2) || '',
+        row.normalized_hyoid_relative_x?.toFixed(2) || '',
+        row.normalized_hyoid_relative_y?.toFixed(2) || '',
+        row.relative_change_bolus_pharynx_overlap?.toFixed(2) || '',
+        row.relative_change_bolus_vestibule_overlap?.toFixed(2) || '',
+        row.relative_change_pharynx?.toFixed(2) || '',
+        row.relative_change_vestibule?.toFixed(2) || '',
+        row.relative_change_bolus?.toFixed(2) || '',
+        row.relative_change_hyoid_c4_distance?.toFixed(2) || '',
+        row.relative_change_ues_length?.toFixed(2) || '',
+        row.relative_change_hyoid_relative_x?.toFixed(2) || '',
+        row.relative_change_hyoid_relative_y?.toFixed(2) || ''
+      ].join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `comprehensive_analysis_${Date.now()}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // 生成Z-score分析CSV
+  const generateZScoreCSV = (data: any) => {
+    const csvContent = [
+      'Frame,Smoothed_bolus_pharynx_overlap,Smoothed_bolus_vestibule_overlap,Smoothed_pharynx,Smoothed_vestibule,Smoothed_bolus,Smoothed_hyoid_relative_x,Smoothed_hyoid_relative_y,Normalized_bolus_pharynx_overlap,Normalized_bolus_vestibule_overlap,Normalized_pharynx,Normalized_vestibule,Normalized_bolus,Normalized_hyoid_c4_distance,Normalized_ues_length,Normalized_hyoid_relative_x,Normalized_hyoid_relative_y,ZScore_bolus_pharynx_overlap,ZScore_bolus_vestibule_overlap,ZScore_pharynx,ZScore_vestibule,ZScore_bolus,ZScore_hyoid_c4_distance,ZScore_ues_length,ZScore_hyoid_relative_x,ZScore_hyoid_relative_y',
+      ...data.processedData.map((row: any) => [
+        row.frame,
+        row.smoothed_bolus_pharynx_overlap?.toFixed(2) || '',
+        row.smoothed_bolus_vestibule_overlap?.toFixed(2) || '',
+        row.smoothed_pharynx?.toFixed(2) || '',
+        row.smoothed_vestibule?.toFixed(2) || '',
+        row.smoothed_bolus?.toFixed(2) || '',
+        row.smoothed_hyoid_relative_x?.toFixed(2) || '',
+        row.smoothed_hyoid_relative_y?.toFixed(2) || '',
+        row.normalized_bolus_pharynx_overlap?.toFixed(2) || '',
+        row.normalized_bolus_vestibule_overlap?.toFixed(2) || '',
+        row.normalized_pharynx?.toFixed(2) || '',
+        row.normalized_vestibule?.toFixed(2) || '',
+        row.normalized_bolus?.toFixed(2) || '',
+        row.normalized_hyoid_c4_distance?.toFixed(2) || '',
+        row.normalized_ues_length?.toFixed(2) || '',
+        row.normalized_hyoid_relative_x?.toFixed(2) || '',
+        row.normalized_hyoid_relative_y?.toFixed(2) || '',
+        row.zscore_bolus_pharynx_overlap?.toFixed(2) || '',
+        row.zscore_bolus_vestibule_overlap?.toFixed(2) || '',
+        row.zscore_pharynx?.toFixed(2) || '',
+        row.zscore_vestibule?.toFixed(2) || '',
+        row.zscore_bolus?.toFixed(2) || '',
+        row.zscore_hyoid_c4_distance?.toFixed(2) || '',
+        row.zscore_ues_length?.toFixed(2) || '',
+        row.zscore_hyoid_relative_x?.toFixed(2) || '',
+        row.zscore_hyoid_relative_y?.toFixed(2) || ''
+      ].join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `zscore_analysis_${Date.now()}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const hyoidChartOption = useMemo(() => {
+    const areas = summary?.signals?.areas ?? [];
+    if (!areas.length) return undefined;
+    
+    // 使用相对坐标，过滤掉无效数据
+    const validData = areas
+      .map((area, frameIdx) => ({
+        frame: frameIdx,
+        x: area.hyoid_relative_x,
+        y: area.hyoid_relative_y,
+        valid: area.coordinate_system_valid && 
+               area.hyoid_relative_x !== null && 
+               area.hyoid_relative_y !== null
+      }))
+      .filter(item => item.valid);
+    
+    if (!validData.length) return undefined;
+
+    // 分离轨迹点和连接线
+    const scatterData = validData.map((item: any) => [item.x, item.y]);
+    const lineData = validData.map((item: any) => [item.x, item.y]);
+
+    // 计算坐标范围，添加边距
+    const xValues = validData.map((item: any) => item.x!);
+    const yValues = validData.map((item: any) => item.y!);
+    const xRange = Math.max(...xValues) - Math.min(...xValues);
+    const yRange = Math.max(...yValues) - Math.min(...yValues);
+    const margin = Math.max(xRange, yRange) * 0.1; // 10%边距
+
+    return {
+      title: { 
+        text: 'Hyoid Trajectory (Relative Coordinates)',
+        left: 'center',
+        top: 10,
+        textStyle: { fontSize: 18, fontWeight: 'bold' },
+        itemGap: 20
+      },
+      tooltip: {
+        trigger: 'item',
+        formatter: function(params: any) {
+          if (params.componentType === 'series') {
+            const dataIndex = params.dataIndex;
+            const item = validData[dataIndex];
+            return `Frame: ${item.frame}<br/>X: ${item.x?.toFixed(2)}<br/>Y: ${item.y?.toFixed(2)}`;
+          }
+          return '';
+        }
+      },
+      legend: { 
+        data: ['Hyoid Position', 'Trajectory'],
+        top: 60,
+        itemGap: 20,
+        textStyle: { fontSize: 12 }
+      },
+      grid: { 
+        left: 60, 
+        right: 20, 
+        top: 120, 
+        bottom: 50,
+        containLabel: true
+      },
+      xAxis: { 
+        type: 'value', 
+        name: 'Relative X (perpendicular to C2C4)',
+        nameLocation: 'middle',
+        nameGap: 30,
+        min: Math.min(...xValues) - margin,
+        max: Math.max(...xValues) + margin,
+        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#e0e0e0' } },
+        axisLine: { lineStyle: { color: '#333' } },
+        axisTick: { show: true }
+      },
+      yAxis: { 
+        type: 'value', 
+        name: 'Relative Y (along C2C4)',
+        nameLocation: 'middle',
+        nameGap: 40,
+        min: Math.min(...yValues) - margin,
+        max: Math.max(...yValues) + margin,
+        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#e0e0e0' } },
+        axisLine: { lineStyle: { color: '#333' } },
+        axisTick: { show: true }
+      },
+      series: [
+        { 
+          type: 'scatter', 
+          name: 'Hyoid Position',
+          data: scatterData, 
+          symbolSize: function(value: any, params: any) {
+            // 根据帧数调整点的大小，让轨迹更清晰
+            const frameIdx = validData[params.dataIndex].frame;
+            if (frameIdx === 0) return 12; // 起始点更大
+            if (frameIdx === validData.length - 1) return 12; // 结束点更大
+            return 6; // 中间点较小
+          },
+          itemStyle: { 
+            color: function(params: any) {
+              // 根据帧数渐变颜色，显示运动方向
+              const frameIdx = validData[params.dataIndex].frame;
+              const progress = frameIdx / (validData.length - 1);
+              return `hsl(${200 + progress * 160}, 70%, 50%)`; // 从蓝色渐变到红色
+            }
+          },
+          emphasis: {
+            itemStyle: {
+              borderColor: '#fff',
+              borderWidth: 2,
+              shadowBlur: 10,
+              shadowColor: 'rgba(0,0,0,0.3)'
+            }
+          }
+        },
+        {
+          type: 'line',
+          name: 'Trajectory',
+          data: lineData,
+          smooth: true,
+          lineStyle: { 
+            width: 3, 
+            color: '#4ecdc4',
+            shadowBlur: 5,
+            shadowColor: 'rgba(0,0,0,0.2)'
+          },
+          showSymbol: false,
+          emphasis: {
+            lineStyle: { width: 5 }
+          }
+        }
+      ],
+      // 添加数据缩放功能
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'filter'
+        },
+        {
+          type: 'inside',
+          yAxisIndex: 0,
+          filterMode: 'filter'
+        }
+      ],
+      // 添加工具箱
+      toolbox: {
+        feature: {
+          dataZoom: { title: 'Zoom' },
+          restore: { title: 'Restore' },
+          saveAsImage: { title: 'Save' }
+        },
+        right: 20,
+        top: 20,
+        itemSize: 16,
+        itemGap: 8
+      }
+    };
+  }, [summary]);
+
+  const bolusTrajectoryChartOption = useMemo(() => {
+    const areas = summary?.signals?.areas ?? [];
+    if (!areas.length) return undefined;
+    
+    // 过滤出有效的bolus追踪数据
+    const validData = areas
+      .map((area, frameIdx) => ({
+        frame: frameIdx,
+        front_x: area.bolus_front_x,
+        front_y: area.bolus_front_y,
+        back_x: area.bolus_back_x,
+        back_y: area.bolus_back_y,
+        valid: area.bolus_track_valid && 
+               area.bolus_front_x !== null && 
+               area.bolus_front_y !== null &&
+               area.bolus_back_x !== null && 
+               area.bolus_back_y !== null
+      }))
+      .filter(item => item.valid);
+    
+    if (!validData.length) return undefined;
+
+    // 分离前端和后端数据
+    const frontData = validData.map(item => [item.front_x, item.front_y]);
+    const backData = validData.map(item => [item.back_x, item.back_y]);
+
+    // 计算坐标范围，添加边距
+    const allX = [...validData.map(item => item.front_x!), ...validData.map(item => item.back_x!)];
+    const allY = [...validData.map(item => item.front_y!), ...validData.map(item => item.back_y!)];
+    const xRange = Math.max(...allX) - Math.min(...allX);
+    const yRange = Math.max(...allY) - Math.min(...allY);
+    const margin = Math.max(xRange, yRange) * 0.1; // 10%边距
+
+    return {
+      title: { 
+        text: 'Bolus Front/Back End Trajectory (Relative Coordinates)',
+        left: 'center',
+        top: 10,
+        textStyle: { fontSize: 18, fontWeight: 'bold' },
+        itemGap: 20
+      },
+      tooltip: {
+        trigger: 'item',
+        formatter: function(params: any) {
+          const dataIndex = params.dataIndex;
+          const item = validData[dataIndex];
+          return `Frame: ${item.frame}<br/>
+                  Front: (${item.front_x?.toFixed(2)}, ${item.front_y?.toFixed(2)})<br/>
+                  Back: (${item.back_x?.toFixed(2)}, ${item.back_y?.toFixed(2)})`;
+        }
+      },
+      legend: { 
+        data: ['Front End', 'Back End', 'Front Trajectory', 'Back Trajectory'],
+        top: 60,
+        itemGap: 20,
+        textStyle: { fontSize: 12 }
+      },
+      grid: { 
+        left: 60, 
+        right: 20, 
+        top: 120, 
+        bottom: 50,
+        containLabel: true
+      },
+      xAxis: { 
+        type: 'value', 
+        name: 'Relative X (perpendicular to C2C4)',
+        nameLocation: 'middle',
+        nameGap: 30,
+        min: Math.min(...allX) - margin,
+        max: Math.max(...allX) + margin,
+        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#e0e0e0' } },
+        axisLine: { lineStyle: { color: '#333' } },
+        axisTick: { show: true }
+      },
+      yAxis: { 
+        type: 'value', 
+        name: 'Relative Y (along C2C4)',
+        nameLocation: 'middle',
+        nameGap: 40,
+        min: Math.min(...allY) - margin,
+        max: Math.max(...allY) + margin,
+        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#e0e0e0' } },
+        axisLine: { lineStyle: { color: '#333' } },
+        axisTick: { show: true }
+      },
+      series: [
+        { 
+          type: 'scatter', 
+          name: 'Front End',
+          data: frontData, 
+          symbolSize: function(value: any, params: any) {
+            // 根据帧数调整点的大小
+            const frameIdx = validData[params.dataIndex].frame;
+            if (frameIdx === 0) return 12; // 起始点更大
+            if (frameIdx === validData.length - 1) return 12; // 结束点更大
+            return 6; // 中间点较小
+          },
+          itemStyle: { 
+            color: function(params: any) {
+              // 根据帧数渐变颜色，显示运动方向
+              const frameIdx = validData[params.dataIndex].frame;
+              const progress = frameIdx / (validData.length - 1);
+              return `hsl(${0 + progress * 60}, 80%, 60%)`; // 从红色渐变到橙色
+            }
+          },
+          emphasis: {
+            itemStyle: {
+              borderColor: '#fff',
+              borderWidth: 2,
+              shadowBlur: 10,
+              shadowColor: 'rgba(0,0,0,0.3)'
+            }
+          }
+        },
+        {
+          type: 'line',
+          name: 'Front Trajectory',
+          data: frontData,
+          smooth: true,
+          lineStyle: { 
+            width: 3, 
+            color: '#ff6b6b',
+            shadowBlur: 5,
+            shadowColor: 'rgba(0,0,0,0.2)'
+          },
+          showSymbol: false,
+          emphasis: {
+            lineStyle: { width: 5 }
+          }
+        },
+        { 
+          type: 'scatter', 
+          name: 'Back End',
+          data: backData, 
+          symbolSize: function(value: any, params: any) {
+            // 根据帧数调整点的大小
+            const frameIdx = validData[params.dataIndex].frame;
+            if (frameIdx === 0) return 12; // 起始点更大
+            if (frameIdx === validData.length - 1) return 12; // 结束点更大
+            return 6; // 中间点较小
+          },
+          itemStyle: { 
+            color: function(params: any) {
+              // 根据帧数渐变颜色，显示运动方向
+              const frameIdx = validData[params.dataIndex].frame;
+              const progress = frameIdx / (validData.length - 1);
+              return `hsl(${180 + progress * 60}, 80%, 60%)`; // 从青色渐变到蓝色
+            }
+          },
+          emphasis: {
+            itemStyle: {
+              borderColor: '#fff',
+              borderWidth: 2,
+              shadowBlur: 10,
+              shadowColor: 'rgba(0,0,0,0.3)'
+            }
+          }
+        },
+        {
+          type: 'line',
+          name: 'Back Trajectory',
+          data: backData,
+          smooth: true,
+          lineStyle: { 
+            width: 3, 
+            color: '#4ecdc4',
+            shadowBlur: 5,
+            shadowColor: 'rgba(0,0,0,0.2)'
+          },
+          showSymbol: false,
+          emphasis: {
+            lineStyle: { width: 5 }
+          }
+        }
+      ],
+      // 添加数据缩放功能
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'filter'
+        },
+        {
+          type: 'inside',
+          yAxisIndex: 0,
+          filterMode: 'filter'
+        }
+      ],
+      // 添加工具箱
+      toolbox: {
+        feature: {
+          dataZoom: { title: 'Zoom' },
+          restore: { title: 'Restore' },
+          saveAsImage: { title: 'Save' }
+        },
+        right: 20,
+        top: 20,
+        itemSize: 16,
+        itemGap: 8
+      }
+    };
+  }, [summary]);
+
+  const downloadCsv = () => {
+    if (!jobId) return;
+    window.open(`${BACKEND}/jobs/${jobId}/signals.csv`, '_blank');
+  };
+
+  // 计算特殊时刻帧
+  const calculateSpecialMoments = useMemo(() => {
+    if (!summary?.signals?.areas) return [];
+    
+    const areas = summary.signals.areas;
+    const fps = summary.fps || 30; // 使用实际帧率，如果没有则默认30fps
+    const specialMoments: PreviewItem[] = [];
+    
+    // 1. 咽期吞咽起始：bolus和pharynx第一次重合
+    const firstOverlapIndex = areas.findIndex(area => area.bolus_pharynx_overlap > 0);
+    if (firstOverlapIndex !== -1) {
+      specialMoments.push({
+        frame_index: firstOverlapIndex,
+        mask_url: `${BACKEND}/jobs/${jobId}/frames/${firstOverlapIndex}/mask.png`,
+        overlay_url: `${BACKEND}/jobs/${jobId}/frames/${firstOverlapIndex}/overlay.png`,
+        frame_name: "咽期吞咽起始",
+        is_special_moment: true
+      });
+    }
+    
+    // 2. 该患者存在误吸误咽：bolus和vestibule重合面积最大的帧
+    const maxVestibuleOverlapIndex = areas.reduce((maxIndex, area, index) => 
+      area.bolus_vestibule_overlap > areas[maxIndex].bolus_vestibule_overlap ? index : maxIndex, 0
+    );
+    if (areas[maxVestibuleOverlapIndex].bolus_vestibule_overlap > 0) {
+      specialMoments.push({
+        frame_index: maxVestibuleOverlapIndex,
+        mask_url: `${BACKEND}/jobs/${jobId}/frames/${maxVestibuleOverlapIndex}/mask.png`,
+        overlay_url: `${BACKEND}/jobs/${jobId}/frames/${maxVestibuleOverlapIndex}/overlay.png`,
+        frame_name: "该患者存在误吸误咽",
+        is_special_moment: true
+      });
+    }
+    
+    // 3. 舌骨峰值：hyoid_c4_distance最大的帧
+    const maxHyoidDistanceIndex = areas.reduce((maxIndex, area, index) => {
+      if (area.hyoid_c4_distance === null || areas[maxIndex].hyoid_c4_distance === null) return maxIndex;
+      return area.hyoid_c4_distance > areas[maxIndex].hyoid_c4_distance ? index : maxIndex;
+    }, 0);
+    if (areas[maxHyoidDistanceIndex].hyoid_c4_distance !== null) {
+      specialMoments.push({
+        frame_index: maxHyoidDistanceIndex,
+        mask_url: `${BACKEND}/jobs/${jobId}/frames/${maxHyoidDistanceIndex}/mask.png`,
+        overlay_url: `${BACKEND}/jobs/${jobId}/frames/${maxHyoidDistanceIndex}/overlay.png`,
+        frame_name: "舌骨峰值",
+        is_special_moment: true
+      });
+    }
+    
+    // 4. 咽腔收缩最大和最小帧
+    const maxPharynxIndex = areas.reduce((maxIndex, area, index) => 
+      area.pharynx > areas[maxIndex].pharynx ? index : maxIndex, 0
+    );
+    const minPharynxIndex = areas.reduce((minIndex, area, index) => 
+      area.pharynx < areas[minIndex].pharynx ? index : minIndex, 0
+    );
+    
+    specialMoments.push({
+      frame_index: maxPharynxIndex,
+      mask_url: `${BACKEND}/jobs/${jobId}/frames/${maxPharynxIndex}/mask.png`,
+      overlay_url: `${BACKEND}/jobs/${jobId}/frames/${maxPharynxIndex}/overlay.png`,
+      frame_name: "咽腔收缩最大",
+      is_special_moment: true
+    });
+    
+    specialMoments.push({
+      frame_index: minPharynxIndex,
+      mask_url: `${BACKEND}/jobs/${jobId}/frames/${minPharynxIndex}/mask.png`,
+      overlay_url: `${BACKEND}/jobs/${jobId}/frames/${minPharynxIndex}/overlay.png`,
+      frame_name: "咽腔收缩最小",
+      is_special_moment: true
+    });
+    
+    // 5. 咽期吞咽结束：bolus和pharynx重合后再次不重合
+    if (firstOverlapIndex !== -1) {
+      const lastOverlapIndex = areas.findIndex((area, index) => 
+        index > firstOverlapIndex && area.bolus_pharynx_overlap === 0
+      );
+      if (lastOverlapIndex !== -1) {
+        specialMoments.push({
+          frame_index: lastOverlapIndex,
+          mask_url: `${BACKEND}/jobs/${jobId}/frames/${lastOverlapIndex}/mask.png`,
+          overlay_url: `${BACKEND}/jobs/${jobId}/frames/${lastOverlapIndex}/overlay.png`,
+          frame_name: "咽期吞咽结束",
+          is_special_moment: true
+        });
+      }
+    }
+    
+    return specialMoments;
+  }, [summary, jobId]);
+
+  // 计算归一化数据
+  const normalizedData = useMemo(() => {
+    if (!summary?.signals?.areas) return null;
+    
+    const areas = summary.signals.areas;
+    
+    // 1. 计算c2c4_length的中值作为reference
+    const validC2C4Lengths = areas
+      .map(area => area.c2c4_length)
+      .filter(length => length !== null && length > 0);
+    
+    if (validC2C4Lengths.length === 0) return null;
+    
+    // 计算中值
+    const sortedLengths = [...validC2C4Lengths].sort((a, b) => a! - b!);
+    const midIndex = Math.floor(sortedLengths.length / 2);
+    const reference = sortedLengths.length % 2 === 0 
+      ? (sortedLengths[midIndex - 1]! + sortedLengths[midIndex]!) / 2
+      : sortedLengths[midIndex]!;
+    
+    // 2. 计算归一化数据
+    const normalizedAreas = areas.map(area => {
+      if (!area.c2c4_length || area.c2c4_length <= 0) {
+        return {
+          ...area,
+          // 距离归一化（平方关系）
+          normalized_hyoid_c4_distance: null,
+          normalized_ues_length: null,
+                  // 面积归一化（线性关系）
+        normalized_pharynx: null,
+        normalized_vestibule: null,
+        normalized_bolus_pharynx_overlap: null,
+        normalized_bolus_vestibule_overlap: null
+        };
+      }
+      
+      const scaleFactor = reference / area.c2c4_length;
+      const scaleFactorSquared = scaleFactor * scaleFactor;
+      
+      return {
+        ...area,
+        // 距离归一化（平方关系）
+        normalized_hyoid_c4_distance: area.hyoid_c4_distance !== null 
+          ? area.hyoid_c4_distance * scaleFactorSquared 
+          : null,
+        normalized_ues_length: area.ues_length !== null 
+          ? area.ues_length * scaleFactorSquared 
+          : null,
+        // 面积归一化（线性关系）
+        normalized_pharynx: area.pharynx * scaleFactor,
+        normalized_vestibule: area.vestibule * scaleFactor,
+        normalized_bolus_pharynx_overlap: area.bolus_pharynx_overlap * scaleFactor,
+        normalized_bolus_vestibule_overlap: area.bolus_vestibule_overlap * scaleFactor
+      };
+    });
+    
+    return {
+      reference,
+      areas: normalizedAreas
+    };
+  }, [summary]);
+
+  // 创建原始面积变化图表
+  const areaChartOption = useMemo(() => {
+    const frames = summary?.signals?.areas?.length ?? 0;
+    if (!frames) return undefined;
+    
+    const areas = summary!.signals!.areas;
+    const x = Array.from({ length: frames }, (_, i) => i);
+    
+    // 使用与原来面积图表完全相同的数据处理方式
+    const pharynx = areas.map(a => a.pharynx);
+    const vestibule = areas.map(a => a.vestibule);
+    const bolusPharynxOverlap = areas.map(a => a.bolus_pharynx_overlap);
+    const bolusVestibuleOverlap = areas.map(a => a.bolus_vestibule_overlap);
+
+    return {
+      title: { 
+        text: 'Polygon Area Changes Over Frames',
+        left: 'center',
+        top: 10,
+        textStyle: { fontSize: 18, fontWeight: 'bold' },
+        itemGap: 20
+      },
+      tooltip: { 
+        trigger: 'axis',
+        formatter: function(params: any) {
+          let tooltip = `Frame: ${params[0].axisValue}<br/>`;
+          params.forEach((param: any) => {
+            tooltip += `${param.seriesName}: ${param.value} px²<br/>`;
+          });
+          return tooltip;
+        }
+      },
+      legend: { 
+        data: ['pharynx', 'vestibule', 'bolus-pharynx overlap', 'bolus-vestibule overlap'],
+        top: 60,
+        itemGap: 20,
+        textStyle: { fontSize: 12 }
+      },
+      xAxis: { 
+        type: 'category', 
+        data: x, 
+        name: 'frame',
+        axisPointer: {
+          value: 0,
+          snap: true
+        }
+      },
+      yAxis: {
+        type: 'value',
+        name: 'Area (px²)',
+        nameLocation: 'middle',
+        nameGap: 40,
+        splitLine: { 
+          show: true, 
+          lineStyle: { type: 'dashed', color: '#e0e0e0' } 
+        },
+        axisLine: { lineStyle: { color: '#ff6b6b' } },
+        axisTick: { show: true },
+        // 优化标签显示，大数值显示为k单位
+        axisLabel: {
+          formatter: function(value: number) {
+            if (value >= 1000) {
+              return (value / 1000).toFixed(1) + 'k';
+            }
+            return value.toString();
+          }
+        }
+      },
+      series: [
+        { 
+          type: 'line', 
+          name: 'pharynx', 
+          data: pharynx, 
+          smooth: true,
+          lineStyle: { width: 2, color: '#ff6b6b' },
+          itemStyle: { color: '#ff6b6b' }
+        },
+        { 
+          type: 'line', 
+          name: 'vestibule', 
+          data: vestibule, 
+          smooth: true,
+          lineStyle: { width: 2, color: '#4ecdc4' },
+          itemStyle: { color: '#4ecdc4' }
+        },
+        { 
+          type: 'line', 
+          name: 'bolus-pharynx overlap', 
+          data: bolusPharynxOverlap, 
+          smooth: true,
+          lineStyle: { width: 2, type: 'dashed', color: '#45b7d1' },
+          itemStyle: { color: '#45b7d1' }
+        },
+        { 
+          type: 'line', 
+          name: 'bolus-vestibule overlap', 
+          data: bolusVestibuleOverlap, 
+          smooth: true,
+          lineStyle: { width: 2, type: 'dashed', color: '#96ceb4' },
+          itemStyle: { color: '#96ceb4' }
+        }
+      ],
+      grid: { left: 60, right: 20, top: 120, bottom: 50 },
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'filter'
+        }
+      ],
+      toolbox: {
+        feature: {
+          dataZoom: { title: 'Zoom' },
+          restore: { title: 'Restore' },
+          saveAsImage: { title: 'Save' }
+        },
+        right: 20,
+        top: 20,
+        itemSize: 16,
+        itemGap: 8
+      }
+    };
+  }, [summary]);
+
+  // 创建归一化后的面积变化图表
+  const normalizedAreaChartOption = useMemo(() => {
+    if (!normalizedData) return undefined;
+    
+    const frames = normalizedData.areas.length;
+    const x = Array.from({ length: frames }, (_, i) => i);
+    
+    // 使用归一化后的数据
+    const pharynx = normalizedData.areas.map(a => a.normalized_pharynx);
+    const vestibule = normalizedData.areas.map(a => a.normalized_vestibule);
+    const bolusPharynxOverlap = normalizedData.areas.map(a => a.normalized_bolus_pharynx_overlap);
+    const bolusVestibuleOverlap = normalizedData.areas.map(a => a.normalized_bolus_vestibule_overlap);
+
+    return {
+      title: { 
+        text: 'Normalized Polygon Area Changes Over Frames (C2C4 Length Normalized)',
+        left: 'center',
+        top: 10,
+        textStyle: { fontSize: 18, fontWeight: 'bold' },
+        itemGap: 20
+      },
+      tooltip: { 
+        trigger: 'axis',
+        formatter: function(params: any) {
+          let tooltip = `Frame: ${params[0].axisValue}<br/>`;
+          tooltip += `Reference C2C4 Length: ${normalizedData.reference.toFixed(2)} px<br/>`;
+          params.forEach((param: any) => {
+            tooltip += `${param.seriesName}: ${param.value.toFixed(2)} normalized px²<br/>`;
+          });
+          return tooltip;
+        }
+      },
+      legend: { 
+        data: ['Normalized pharynx', 'Normalized vestibule', 'Normalized bolus-pharynx overlap', 'Normalized bolus-vestibule overlap'],
+        top: 60,
+        itemGap: 20,
+        textStyle: { fontSize: 12 }
+      },
+      xAxis: { 
+        type: 'category', 
+        data: x, 
+        name: 'frame',
+        axisPointer: {
+          value: 0,
+          snap: true
+        }
+      },
+      yAxis: {
+        type: 'value',
+        name: 'Normalized Area (px²)',
+        nameLocation: 'middle',
+        nameGap: 40,
+        splitLine: { 
+          show: true, 
+          lineStyle: { type: 'dashed', color: '#e0e0e0' } 
+        },
+        axisLine: { lineStyle: { color: '#ff6b6b' } },
+        axisTick: { show: true },
+        // 优化标签显示，大数值显示为k单位
+        axisLabel: {
+          formatter: function(value: number) {
+            if (value >= 1000) {
+              return (value / 1000).toFixed(1) + 'k';
+            }
+            return value.toString();
+          }
+        }
+      },
+      series: [
+        { 
+          type: 'line', 
+          name: 'Normalized pharynx', 
+          data: pharynx, 
+          smooth: true,
+          lineStyle: { width: 2, color: '#ff6b6b' },
+          itemStyle: { color: '#ff6b6b' }
+        },
+        { 
+          type: 'line', 
+          name: 'Normalized vestibule', 
+          data: vestibule, 
+          smooth: true,
+          lineStyle: { width: 2, color: '#4ecdc4' },
+          itemStyle: { color: '#4ecdc4' }
+        },
+        { 
+          type: 'line', 
+          name: 'Normalized bolus-pharynx overlap', 
+          data: bolusPharynxOverlap, 
+          smooth: true,
+          lineStyle: { width: 2, type: 'dashed', color: '#45b7d1' },
+          itemStyle: { color: '#45b7d1' }
+        },
+        { 
+          type: 'line', 
+          name: 'Normalized bolus-vestibule overlap', 
+          data: bolusVestibuleOverlap, 
+          smooth: true,
+          lineStyle: { width: 2, type: 'dashed', color: '#96ceb4' },
+          itemStyle: { color: '#96ceb4' }
+        }
+      ],
+      grid: { left: 60, right: 20, top: 120, bottom: 50 },
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'filter'
+        }
+      ],
+      toolbox: {
+        feature: {
+          dataZoom: { title: 'Zoom' },
+          restore: { title: 'Restore' },
+          saveAsImage: { title: 'Save' }
+        },
+        right: 20,
+        top: 20,
+        itemSize: 16,
+        itemGap: 8
+      }
+    };
+  }, [normalizedData]);
+
+  // 创建归一化后的Hyoid距离和UES长度组合图表
+  const normalizedHyoidDistanceChartOption = useMemo(() => {
+    if (!normalizedData) return undefined;
+    
+    const areas = normalizedData.areas;
+    const frames = Array.from({ length: areas.length }, (_, i) => i);
+    const hyoidDistances = areas.map(area => area.normalized_hyoid_c4_distance);
+    const uesLengths = areas.map(area => area.normalized_ues_length);
+    
+    // 过滤掉无效数据
+    const validHyoidData = frames
+      .map((frame, idx) => ({ frame, distance: hyoidDistances[idx] }))
+      .filter(item => item.distance !== null);
+    
+    const validUesData = frames
+      .map((frame, idx) => ({ frame, length: uesLengths[idx] }))
+      .filter(item => item.length !== null);
+
+    if (!validHyoidData.length || !validUesData.length) return undefined;
+
+    // 计算归一化后的数据范围
+    const distances = validHyoidData.map(item => item.distance!);
+    const minDistance = Math.min(...distances);
+    const maxDistance = Math.max(...distances);
+    const distanceRange = maxDistance - minDistance;
+    
+    const lengths = validUesData.map(item => item.length!);
+    const minLength = Math.min(...lengths);
+    const maxLength = Math.max(...lengths);
+    const lengthRange = maxLength - minLength;
+    
+    // 计算优化的Y轴范围
+    let hyoidYMin, hyoidYMax;
+    if (distanceRange <= 10) {
+      const padding = Math.max(1, distanceRange * 0.3);
+      hyoidYMin = Math.max(0, minDistance - padding);
+      hyoidYMax = maxDistance + padding;
+    } else if (distanceRange <= 50) {
+      const padding = Math.max(2, distanceRange * 0.2);
+      hyoidYMin = Math.max(0, minDistance - padding);
+      hyoidYMax = maxDistance + padding;
+    } else {
+      const padding = Math.max(5, distanceRange * 0.1);
+      hyoidYMin = Math.max(0, minDistance - padding);
+      hyoidYMax = maxDistance + padding;
+    }
+    
+    let uesYMin, uesYMax;
+    if (lengthRange <= 5) {
+      const padding = Math.max(2, lengthRange * 0.8);
+      uesYMin = Math.max(0, minLength - padding);
+      uesYMax = maxLength + padding;
+    } else if (lengthRange <= 15) {
+      const padding = Math.max(1.5, lengthRange * 0.4);
+      uesYMin = Math.max(0, minLength - padding);
+      uesYMax = maxLength + padding;
+    } else if (lengthRange <= 30) {
+      const padding = Math.max(1, lengthRange * 0.25);
+      uesYMin = Math.max(0, minLength - padding);
+      uesYMax = maxLength + padding;
+    } else {
+      const padding = Math.max(0.5, lengthRange * 0.15);
+      uesYMin = Math.max(0, minLength - padding);
+      uesYMax = maxLength + padding;
+    }
+
+    return {
+      title: { 
+        text: 'Normalized Hyoid Distances & UES Length (C2C4 Length Normalized)',
+        left: 'center',
+        top: 10,
+        textStyle: { fontSize: 18, fontWeight: 'bold' },
+        itemGap: 20
+      },
+      tooltip: { 
+        trigger: 'axis',
+        axisPointer: {
+          type: 'cross'
+        },
+        formatter: function(params: any) {
+          let tooltip = `Frame: ${params[0].axisValue}<br/>`;
+          tooltip += `Reference C2C4 Length: ${normalizedData.reference.toFixed(2)} px<br/>`;
+          params.forEach((param: any) => {
+            if (param.seriesName.includes('Length')) {
+              tooltip += `${param.seriesName}: ${param.value?.toFixed(2)} normalized px<br/>`;
+            } else {
+              tooltip += `${param.seriesName}: ${param.value?.toFixed(2)} normalized px<br/>`;
+            }
+          });
+          return tooltip;
+        }
+      },
+      legend: { 
+        data: ['Normalized Hyoid-C4 Distance', 'Normalized UES Length'],
+        top: 60,
+        itemGap: 20,
+        textStyle: { fontSize: 12 }
+      },
+      xAxis: { 
+        type: 'category', 
+        data: frames, 
+        name: 'frame',
+        axisPointer: {
+          value: 0,
+          snap: true
+        }
+      },
+      yAxis: [
+        {
+          type: 'value',
+          name: 'Normalized Hyoid-C4 Distance (px)',
+          nameLocation: 'middle',
+          nameGap: 40,
+          position: 'left',
+          min: hyoidYMin,
+          max: hyoidYMax,
+          splitLine: { 
+            show: true, 
+            lineStyle: { type: 'dashed', color: '#e0e0e0' } 
+          },
+          axisLine: { lineStyle: { color: '#9c88ff' } },
+          axisTick: { show: true }
+        },
+        {
+          type: 'value',
+          name: 'Normalized UES Length (px)',
+          nameLocation: 'middle',
+          nameGap: 40,
+          position: 'right',
+          min: uesYMin,
+          max: uesYMax,
+          splitLine: { show: false },
+          axisLine: { lineStyle: { color: '#ff9ff3' } },
+          axisTick: { show: true },
+          axisLabel: {
+            formatter: function(value: number) {
+              return value.toFixed(1);
+            }
+          }
+        }
+      ],
+      series: [
+        { 
+          type: 'line', 
+          name: 'Normalized Hyoid-C4 Distance', 
+          data: hyoidDistances, 
+          smooth: true,
+          lineStyle: { width: 3, color: '#9c88ff' },
+          itemStyle: { color: '#9c88ff' },
+          yAxisIndex: 0,
+          symbol: 'circle',
+          symbolSize: function(value: any, params: any) {
+            const distance = value;
+            if (distance === minDistance || distance === maxDistance) {
+              return 8;
+            }
+            return 4;
+          },
+          label: {
+            show: false,
+            position: 'top',
+            formatter: function(params: any) {
+              const distance = params.value;
+              if (distance === minDistance || distance === maxDistance) {
+                return distance.toFixed(1);
+              }
+              return '';
+            },
+            fontSize: 12,
+            color: '#666'
+          }
+        },
+        { 
+          type: 'line', 
+          name: 'Normalized UES Length', 
+          data: uesLengths, 
+          smooth: true,
+          lineStyle: { width: 3, color: '#ff9ff3' },
+          itemStyle: { color: '#ff9ff3' },
+          yAxisIndex: 1,
+          symbol: 'circle',
+          symbolSize: function(value: any, params: any) {
+            const length = value;
+            if (length === minLength || length === maxLength) {
+              return 8;
+            }
+            return 4;
+            },
+          label: {
+            show: false,
+            position: 'top',
+            formatter: function(params: any) {
+              const length = params.value;
+              if (length === minLength || length === maxLength) {
+                return length.toFixed(1);
+              }
+              return '';
+            },
+            fontSize: 12,
+            color: '#666'
+          }
+        }
+      ],
+      grid: { left: 60, right: 60, top: 120, bottom: 50 },
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'filter'
+        }
+      ],
+      toolbox: {
+        feature: {
+          dataZoom: { title: 'Zoom' },
+          restore: { title: 'Restore' },
+          saveAsImage: { title: 'Save' }
+        },
+        right: 20,
+        top: 20,
+        itemSize: 16,
+        itemGap: 8
+      }
+    };
+  }, [normalizedData]);
+
+  // 创建原始Hyoid距离和UES长度组合图表
+  const hyoidDistanceChartOption = useMemo(() => {
+    const areas = summary?.signals?.areas ?? [];
+    if (!areas.length) return undefined;
+    
+    const frames = Array.from({ length: areas.length }, (_, i) => i);
+    const hyoidDistances = areas.map(area => area.hyoid_c4_distance);
+    const uesLengths = areas.map(area => area.ues_length);
+    
+    // 过滤掉无效数据
+    const validHyoidData = frames
+      .map((frame, idx) => ({ frame, distance: hyoidDistances[idx] }))
+      .filter(item => item.distance !== null);
+    
+    const validUesData = frames
+      .map((frame, idx) => ({ frame, length: uesLengths[idx] }))
+      .filter(item => item.length !== null);
+
+    if (!validHyoidData.length || !validUesData.length) return undefined;
+
+    // 计算Hyoid距离范围，用于优化左Y轴显示
+    const distances = validHyoidData.map(item => item.distance!);
+    const minDistance = Math.min(...distances);
+    const maxDistance = Math.max(...distances);
+    const distanceRange = maxDistance - minDistance;
+    
+    // 计算UES长度范围，用于优化右Y轴显示
+    const lengths = validUesData.map(item => item.length!);
+    const minLength = Math.min(...lengths);
+    const maxLength = Math.max(...lengths);
+    const lengthRange = maxLength - minLength;
+    
+    // 计算优化的Y轴范围
+    let hyoidYMin, hyoidYMax;
+    if (distanceRange <= 10) {
+      const padding = Math.max(1, distanceRange * 0.3);
+      hyoidYMin = Math.max(0, minDistance - padding);
+      hyoidYMax = maxDistance + padding;
+    } else if (distanceRange <= 50) {
+      const padding = Math.max(2, distanceRange * 0.2);
+      hyoidYMin = Math.max(0, minDistance - padding);
+      hyoidYMax = maxDistance + padding;
+    } else {
+      const padding = Math.max(5, distanceRange * 0.1);
+      hyoidYMin = Math.max(0, minDistance - padding);
+      hyoidYMax = maxDistance + padding;
+    }
+    
+    let uesYMin, uesYMax;
+    if (lengthRange <= 5) {
+      const padding = Math.max(2, lengthRange * 0.8);
+      uesYMin = Math.max(0, minLength - padding);
+      uesYMax = maxLength + padding;
+    } else if (lengthRange <= 15) {
+      const padding = Math.max(1.5, lengthRange * 0.4);
+      uesYMin = Math.max(0, minLength - padding);
+      uesYMax = maxLength + padding;
+    } else if (lengthRange <= 30) {
+      const padding = Math.max(1, lengthRange * 0.25);
+      uesYMin = Math.max(0, minLength - padding);
+      uesYMax = maxLength + padding;
+    } else {
+      const padding = Math.max(0.5, lengthRange * 0.15);
+      uesYMin = Math.max(0, minLength - padding);
+      uesYMax = maxLength + padding;
+    }
+
+    return {
+      title: { 
+        text: 'Hyoid Distances & UES Length (Relative Coordinates)',
+        left: 'center',
+        top: 10,
+        textStyle: { fontSize: 18, fontWeight: 'bold' },
+        itemGap: 20
+      },
+      tooltip: { 
+        trigger: 'axis',
+        axisPointer: {
+          type: 'cross'
+        },
+        formatter: function(params: any) {
+          let tooltip = `Frame: ${params[0].axisValue}<br/>`;
+          params.forEach((param: any) => {
+            if (param.seriesName.includes('Length')) {
+              tooltip += `${param.seriesName}: ${param.value?.toFixed(2)} px<br/>`;
+            } else {
+              tooltip += `${param.seriesName}: ${param.value?.toFixed(2)} px<br/>`;
+            }
+          });
+          return tooltip;
+        }
+      },
+      legend: { 
+        data: ['Hyoid-C4 Distance', 'UES Length'],
+        top: 60,
+        itemGap: 20,
+        textStyle: { fontSize: 12 }
+      },
+      xAxis: { 
+        type: 'category', 
+        data: frames, 
+        name: 'frame',
+        axisPointer: {
+          value: 0,
+          snap: true
+        }
+      },
+      yAxis: [
+        {
+          type: 'value',
+          name: 'Hyoid-C4 Distance (px)',
+          nameLocation: 'middle',
+          nameGap: 40,
+          position: 'left',
+          min: hyoidYMin,
+          max: hyoidYMax,
+          splitLine: { 
+            show: true, 
+            lineStyle: { type: 'dashed', color: '#e0e0e0' } 
+          },
+          axisLine: { lineStyle: { color: '#9c88ff' } },
+          axisTick: { show: true }
+        },
+        {
+          type: 'value',
+          name: 'UES Length (px)',
+          nameLocation: 'middle',
+          nameGap: 40,
+          position: 'right',
+          min: uesYMin,
+          max: uesYMax,
+          splitLine: { show: false },
+          axisLine: { lineStyle: { color: '#ff9ff3' } },
+          axisTick: { show: true },
+          axisLabel: {
+            formatter: function(value: number) {
+              return value.toFixed(1);
+            }
+          }
+        }
+      ],
+      series: [
+        { 
+          type: 'line', 
+          name: 'Hyoid-C4 Distance', 
+          data: hyoidDistances, 
+          smooth: true,
+          lineStyle: { width: 3, color: '#9c88ff' },
+          itemStyle: { color: '#9c88ff' },
+          yAxisIndex: 0,
+          symbol: 'circle',
+          symbolSize: function(value: any, params: any) {
+            const distance = value;
+            if (distance === minDistance || distance === maxDistance) {
+              return 8;
+            }
+            return 4;
+          },
+          label: {
+            show: false,
+            position: 'top',
+            formatter: function(params: any) {
+              const distance = params.value;
+              if (distance === minDistance || distance === maxDistance) {
+                return distance.toFixed(1);
+              }
+              return '';
+            },
+            fontSize: 12,
+            color: '#666'
+          }
+        },
+        { 
+          type: 'line', 
+          name: 'UES Length', 
+          data: uesLengths, 
+          smooth: true,
+          lineStyle: { width: 3, color: '#ff9ff3' },
+          itemStyle: { color: '#ff9ff3' },
+          yAxisIndex: 1,
+          symbol: 'circle',
+          symbolSize: function(value: any, params: any) {
+            const length = value;
+            if (length === minLength || length === maxLength) {
+              return 8;
+            }
+            return 4;
+          },
+          label: {
+            show: false,
+            position: 'top',
+            formatter: function(params: any) {
+              const length = params.value;
+              if (length === minLength || length === maxLength) {
+                return length.toFixed(1);
+              }
+              return '';
+            },
+            fontSize: 12,
+            color: '#666'
+          }
+        }
+      ],
+      grid: { left: 60, right: 60, top: 120, bottom: 50 },
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'filter'
+        }
+      ],
+      toolbox: {
+        feature: {
+          dataZoom: { title: 'Zoom' },
+          restore: { title: 'Restore' },
+          saveAsImage: { title: 'Save' }
+        },
+        right: 20,
+        top: 20,
+        itemSize: 16,
+        itemGap: 8
+      }
+    };
+  }, [summary]);
+
+
+
+
+  // 创建高级分析的Hyoid距离和UES长度组合图表
+  const advancedHyoidDistanceChartOption = useMemo(() => {
+    if (!advancedData) return undefined;
+    
+    const areas = advancedData.processedData;
+    const frames = Array.from({ length: areas.length }, (_, i) => i);
+    const hyoidDistances = areas.map((area: any) => area.normalized_hyoid_c4_distance);
+    const uesLengths = areas.map((area: any) => area.normalized_ues_length);
+    
+    // 过滤掉无效数据
+    const validHyoidData = frames
+      .map((frame, idx) => ({ frame, distance: hyoidDistances[idx] }))
+      .filter(item => item.distance !== null);
+    
+    const validUesData = frames
+      .map((frame, idx) => ({ frame, length: uesLengths[idx] }))
+      .filter(item => item.length !== null);
+
+    if (!validHyoidData.length || !validUesData.length) return undefined;
+
+    // 计算归一化后的数据范围
+    const distances = validHyoidData.map(item => item.distance!);
+    const minDistance = Math.min(...distances);
+    const maxDistance = Math.max(...distances);
+    const distanceRange = maxDistance - minDistance;
+    
+    const lengths = validUesData.map(item => item.length!);
+    const minLength = Math.min(...lengths);
+    const maxLength = Math.max(...lengths);
+    const lengthRange = maxLength - minLength;
+    
+    // 计算优化的Y轴范围
+    let hyoidYMin, hyoidYMax;
+    if (distanceRange <= 10) {
+      const padding = Math.max(1, distanceRange * 0.3);
+      hyoidYMin = Math.max(0, minDistance - padding);
+      hyoidYMax = maxDistance + padding;
+    } else if (distanceRange <= 50) {
+      const padding = Math.max(2, distanceRange * 0.2);
+      hyoidYMin = Math.max(0, minDistance - padding);
+      hyoidYMax = maxDistance + padding;
+    } else {
+      const padding = Math.max(5, distanceRange * 0.1);
+      hyoidYMin = Math.max(0, minDistance - padding);
+      hyoidYMax = maxDistance + padding;
+    }
+    
+    let uesYMin, uesYMax;
+    if (lengthRange <= 5) {
+      const padding = Math.max(2, lengthRange * 0.8);
+      uesYMin = Math.max(0, minLength - padding);
+      uesYMax = maxLength + padding;
+    } else if (lengthRange <= 15) {
+      const padding = Math.max(1.5, lengthRange * 0.4);
+      uesYMin = Math.max(0, minLength - padding);
+      uesYMax = maxLength + padding;
+    } else if (lengthRange <= 30) {
+      const padding = Math.max(1, lengthRange * 0.25);
+      uesYMin = Math.max(0, minLength - padding);
+      uesYMax = maxLength + padding;
+    } else {
+      const padding = Math.max(0.5, lengthRange * 0.15);
+      uesYMin = Math.max(0, minLength - padding);
+      uesYMax = maxLength + padding;
+    }
+
+    return {
+      title: { 
+        text: 'Smoothed & Normalized Hyoid Distances & UES Length',
+        left: 'center',
+        top: 10,
+        textStyle: { fontSize: 16, fontWeight: 'bold' },
+        itemGap: 20
+      },
+      tooltip: { 
+        trigger: 'axis',
+        axisPointer: {
+          type: 'cross'
+        },
+        formatter: function(params: any) {
+          let tooltip = `Frame: ${params[0].axisValue}<br/>`;
+          tooltip += `Reference C2C4 Length: ${advancedData.reference.toFixed(2)} px<br/>`;
+          params.forEach((param: any) => {
+            if (param.seriesName.includes('Length')) {
+              tooltip += `${param.seriesName}: ${param.value?.toFixed(2)} normalized px<br/>`;
+            } else {
+              tooltip += `${param.seriesName}: ${param.value?.toFixed(2)} normalized px<br/>`;
+            }
+          });
+          return tooltip;
+        }
+      },
+      legend: { 
+        data: ['Advanced Normalized Hyoid-C4 Distance', 'Advanced Normalized UES Length'],
+        top: 60,
+        itemGap: 20,
+        textStyle: { fontSize: 12 }
+      },
+      xAxis: { 
+        type: 'category', 
+        data: frames, 
+        name: 'frame',
+        axisPointer: {
+          value: 0,
+          snap: true
+        }
+      },
+      yAxis: [
+        {
+          type: 'value',
+          name: 'Advanced Normalized Hyoid-C4 Distance (px)',
+          nameLocation: 'middle',
+          nameGap: 40,
+          position: 'left',
+          min: hyoidYMin,
+          max: hyoidYMax,
+          splitLine: { 
+            show: true, 
+            lineStyle: { type: 'dashed', color: '#e0e0e0' } 
+          },
+          axisLine: { lineStyle: { color: '#9c88ff' } },
+          axisTick: { show: true }
+        },
+        {
+          type: 'value',
+          name: 'Advanced Normalized UES Length (px)',
+          nameLocation: 'middle',
+          nameGap: 40,
+          position: 'right',
+          min: uesYMin,
+          max: uesYMax,
+          splitLine: { show: false },
+          axisLine: { lineStyle: { color: '#ff9ff3' } },
+          axisTick: { show: true },
+          axisLabel: {
+            formatter: function(value: number) {
+              return value.toFixed(1);
+            }
+          }
+        }
+      ],
+      series: [
+        { 
+          type: 'line', 
+          name: 'Advanced Normalized Hyoid-C4 Distance', 
+          data: hyoidDistances, 
+          smooth: true,
+          lineStyle: { width: 3, color: '#9c88ff' },
+          itemStyle: { color: '#9c88ff' },
+          yAxisIndex: 0,
+          symbol: 'circle',
+          symbolSize: function(value: any, params: any) {
+            const distance = value;
+            if (distance === minDistance || distance === maxDistance) {
+              return 8;
+            }
+            return 4;
+          },
+          label: {
+            show: false,
+            position: 'top',
+            formatter: function(params: any) {
+              const distance = params.value;
+              if (distance === minDistance || distance === maxDistance) {
+                return distance.toFixed(1);
+              }
+              return '';
+            },
+            fontSize: 12,
+            color: '#666'
+          }
+        },
+        { 
+          type: 'line', 
+          name: 'Advanced Normalized UES Length', 
+          data: uesLengths, 
+          smooth: true,
+          lineStyle: { width: 3, color: '#ff9ff3' },
+          itemStyle: { color: '#ff9ff3' },
+          yAxisIndex: 1,
+          symbol: 'circle',
+          symbolSize: function(value: any, params: any) {
+            const length = value;
+            if (length === minLength || length === maxLength) {
+              return 8;
+            }
+            return 4;
+            },
+          label: {
+            show: false,
+            position: 'top',
+            formatter: function(params: any) {
+              const length = params.value;
+              if (length === minLength || length === maxLength) {
+                return length.toFixed(1);
+              }
+              return '';
+            },
+            fontSize: 12,
+            color: '#666'
+          }
+        }
+      ],
+      grid: { left: 60, right: 60, top: 120, bottom: 50 },
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'filter'
+        }
+      ],
+      toolbox: {
+        feature: {
+          dataZoom: { title: 'Zoom' },
+          restore: { title: 'Restore' },
+          saveAsImage: { title: 'Save' }
+        },
+        right: 20,
+        top: 20,
+        itemSize: 16,
+        itemGap: 8
+      }
+    };
+  }, [advancedData]);
+
+  // 创建高级分析的Hyoid轨迹图表
+  const advancedHyoidTrajectoryChartOption = useMemo(() => {
+    if (!advancedData) return undefined;
+    
+    // 使用归一化后的数据，过滤掉无效数据
+    const validData = advancedData.processedData
+      .map((area: any, frameIdx: number) => ({
+        frame: frameIdx,
+        x: area.normalized_hyoid_relative_x,
+        y: area.normalized_hyoid_relative_y,
+        valid: area.normalized_hyoid_relative_x !== null && 
+               area.normalized_hyoid_relative_y !== null
+      }))
+      .filter((item: any) => item.valid);
+    
+    if (!validData.length) return undefined;
+
+    // 分离轨迹点和连接线
+    const scatterData = validData.map((item: any) => [item.x, item.y]);
+    const lineData = validData.map((item: any) => [item.x, item.y]);
+
+    // 计算坐标范围，添加边距
+    const xValues = validData.map((item: any) => item.x!);
+    const yValues = validData.map((item: any) => item.y!);
+    const xRange = Math.max(...xValues) - Math.min(...xValues);
+    const yRange = Math.max(...yValues) - Math.min(...yValues);
+    const margin = Math.max(xRange, yRange) * 0.1; // 10%边距
+
+    return {
+      title: { 
+        text: 'Smoothed & Normalized Hyoid Trajectory',
+        left: 'center',
+        top: 10,
+        textStyle: { fontSize: 18, fontWeight: 'bold' },
+        itemGap: 20
+      },
+      tooltip: {
+        trigger: 'item',
+        formatter: function(params: any) {
+          if (params.componentType === 'series') {
+            const dataIndex = params.dataIndex;
+            const item = validData[dataIndex];
+          return `Frame: ${item.frame}<br/>X: ${item.x?.toFixed(2)}<br/>Y: ${item.y?.toFixed(2)}<br/>Reference C2C4: ${advancedData.reference.toFixed(2)} px`;
+          }
+          return '';
+        }
+      },
+      legend: { 
+        data: ['Normalized Hyoid Position', 'Normalized Trajectory'],
+        top: 60,
+        itemGap: 20,
+        textStyle: { fontSize: 12 }
+      },
+      grid: { 
+        left: 60, 
+        right: 20, 
+        top: 120, 
+        bottom: 50,
+        containLabel: true
+      },
+      xAxis: { 
+        type: 'value', 
+        name: 'Normalized Relative X (perpendicular to C2C4)',
+        nameLocation: 'middle',
+        nameGap: 30,
+        min: Math.min(...xValues) - margin,
+        max: Math.max(...xValues) + margin,
+        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#e0e0e0' } },
+        axisLine: { lineStyle: { color: '#333' } },
+        axisTick: { show: true }
+      },
+      yAxis: { 
+        type: 'value', 
+        name: 'Normalized Relative Y (along C2C4)',
+        nameLocation: 'middle',
+        nameGap: 40,
+        min: Math.min(...yValues) - margin,
+        max: Math.max(...yValues) + margin,
+        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#e0e0e0' } },
+        axisLine: { lineStyle: { color: '#333' } },
+        axisTick: { show: true }
+      },
+      series: [
+        { 
+          type: 'scatter', 
+          name: 'Normalized Hyoid Position',
+          data: scatterData, 
+          symbolSize: function(value: any, params: any) {
+            // 根据帧数调整点的大小，让轨迹更清晰
+            const frameIdx = validData[params.dataIndex].frame;
+            if (frameIdx === 0) return 12; // 起始点更大
+            if (frameIdx === validData.length - 1) return 12; // 结束点更大
+            return 6; // 中间点较小
+          },
+          itemStyle: { 
+            color: function(params: any) {
+              // 根据帧数渐变颜色，显示运动方向
+              const frameIdx = validData[params.dataIndex].frame;
+              const progress = frameIdx / (validData.length - 1);
+              return `hsl(${200 + progress * 160}, 70%, 50%)`; // 从蓝色渐变到红色
+            }
+          },
+          emphasis: {
+            itemStyle: {
+              borderColor: '#fff',
+              borderWidth: 2,
+              shadowBlur: 10,
+              shadowColor: 'rgba(0,0,0,0.3)'
+            }
+          }
+        },
+        {
+          type: 'line',
+          name: 'Normalized Trajectory',
+          data: lineData,
+          smooth: true,
+          lineStyle: { 
+            width: 3, 
+            color: '#4ecdc4',
+            shadowBlur: 5,
+            shadowColor: 'rgba(0,0,0,0.2)'
+          },
+          showSymbol: false,
+          emphasis: {
+            lineStyle: { width: 5 }
+          }
+        }
+      ],
+      // 添加数据缩放功能
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'filter'
+        },
+        {
+          type: 'inside',
+          yAxisIndex: 0,
+          filterMode: 'filter'
+        }
+      ],
+      // 添加工具箱
+      toolbox: {
+        feature: {
+          dataZoom: { title: 'Zoom' },
+          restore: { title: 'Restore' },
+          saveAsImage: { title: 'Save' }
+        },
+        right: 20,
+        top: 20,
+        itemSize: 16,
+        itemGap: 8
+      }
+    };
+  }, [advancedData]);
+
+  // 创建Z-score分析的面积变化图表
+  const zScoreAreaChartOption = useMemo(() => {
+    if (!zScoreData) return undefined;
+    
+    const frames = zScoreData.processedData.length;
+    const x = Array.from({ length: frames }, (_, i) => i);
+    
+    // 使用Z-score归一化后的数据
+    const pharynx = zScoreData.processedData.map((a: any) => a.zscore_pharynx);
+    const vestibule = zScoreData.processedData.map((a: any) => a.zscore_vestibule);
+    const bolusPharynxOverlap = zScoreData.processedData.map((a: any) => a.zscore_bolus_pharynx_overlap);
+    const bolusVestibuleOverlap = zScoreData.processedData.map((a: any) => a.zscore_bolus_vestibule_overlap);
+
+    return {
+      title: { 
+        text: 'Z-Score Normalized Area Changes',
+        left: 'center',
+        top: 10,
+        textStyle: { fontSize: 16, fontWeight: 'bold' },
+        itemGap: 20
+      },
+      tooltip: { 
+        trigger: 'axis',
+        formatter: function(params: any) {
+          let tooltip = `Frame: ${params[0].axisValue}<br/>`;
+          tooltip += `Reference C2C4 Length: ${zScoreData.reference.toFixed(2)} px<br/>`;
+          params.forEach((param: any) => {
+            tooltip += `${param.seriesName}: ${param.value.toFixed(2)} Z-score<br/>`;
+          });
+          return tooltip;
+        }
+      },
+      legend: { 
+        data: ['Z-Score pharynx', 'Z-Score vestibule', 'Z-Score bolus-pharynx overlap', 'Z-Score bolus-vestibule overlap'],
+        top: 60,
+        itemGap: 20,
+        textStyle: { fontSize: 12 }
+      },
+      xAxis: { 
+        type: 'category', 
+        data: x, 
+        name: 'frame',
+        axisPointer: {
+          value: 0,
+          snap: true
+        }
+      },
+      yAxis: {
+        type: 'value',
+        name: 'Z-Score Normalized Area',
+        nameLocation: 'middle',
+        nameGap: 40,
+        splitLine: { 
+          show: true, 
+          lineStyle: { type: 'dashed', color: '#e0e0e0' } 
+        },
+        axisLine: { lineStyle: { color: '#ff6b6b' } },
+        axisTick: { show: true }
+      },
+      series: [
+        { 
+          type: 'line', 
+          name: 'Z-Score pharynx', 
+          data: pharynx, 
+          smooth: true,
+          lineStyle: { width: 2, color: '#ff6b6b' },
+          itemStyle: { color: '#ff6b6b' }
+        },
+        { 
+          type: 'line', 
+          name: 'Z-Score vestibule', 
+          data: vestibule, 
+          smooth: true,
+          lineStyle: { width: 2, color: '#4ecdc4' },
+          itemStyle: { color: '#4ecdc4' }
+        },
+        { 
+          type: 'line', 
+          name: 'Z-Score bolus-pharynx overlap', 
+          data: bolusPharynxOverlap, 
+          smooth: true,
+          lineStyle: { width: 2, type: 'dashed', color: '#45b7d1' },
+          itemStyle: { color: '#45b7d1' }
+        },
+        { 
+          type: 'line', 
+          name: 'Z-Score bolus-vestibule overlap', 
+          data: bolusVestibuleOverlap, 
+          smooth: true,
+          lineStyle: { width: 2, type: 'dashed', color: '#96ceb4' },
+          itemStyle: { color: '#96ceb4' }
+        }
+      ],
+      grid: { left: 60, right: 20, top: 120, bottom: 50 },
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'filter'
+        }
+      ],
+      toolbox: {
+        feature: {
+          dataZoom: { title: 'Zoom' },
+          restore: { title: 'Restore' },
+          saveAsImage: { title: 'Save' }
+        },
+        right: 20,
+        top: 20,
+        itemSize: 16,
+        itemGap: 8
+      }
+    };
+  }, [zScoreData]);
+
+  // 创建Z-score分析的Hyoid距离和UES长度组合图表
+  const zScoreHyoidDistanceChartOption = useMemo(() => {
+    if (!zScoreData) return undefined;
+    
+    const areas = zScoreData.processedData;
+    const frames = Array.from({ length: areas.length }, (_, i) => i);
+    const hyoidDistances = areas.map((area: any) => area.zscore_hyoid_c4_distance);
+    const uesLengths = areas.map((area: any) => area.zscore_ues_length);
+    
+    // 过滤掉无效数据
+    const validHyoidData = frames
+      .map((frame, idx) => ({ frame, distance: hyoidDistances[idx] }))
+      .filter(item => item.distance !== null);
+    
+    const validUesData = frames
+      .map((frame, idx) => ({ frame, length: uesLengths[idx] }))
+      .filter(item => item.length !== null);
+
+    if (!validHyoidData.length || !validUesData.length) return undefined;
+
+    return {
+      title: { 
+        text: 'Z-Score Normalized Hyoid Distances & UES Length',
+        left: 'center',
+        top: 10,
+        textStyle: { fontSize: 16, fontWeight: 'bold' },
+        itemGap: 20
+      },
+      tooltip: { 
+        trigger: 'axis',
+        axisPointer: {
+          type: 'cross'
+        },
+        formatter: function(params: any) {
+          let tooltip = `Frame: ${params[0].axisValue}<br/>`;
+          tooltip += `Reference C2C4 Length: ${zScoreData.reference.toFixed(2)} px<br/>`;
+          params.forEach((param: any) => {
+            tooltip += `${param.seriesName}: ${param.value?.toFixed(2)} Z-score<br/>`;
+          });
+          return tooltip;
+        }
+      },
+      legend: { 
+        data: ['Z-Score Hyoid-C4 Distance', 'Z-Score UES Length'],
+        top: 60,
+        itemGap: 20,
+        textStyle: { fontSize: 12 }
+      },
+      xAxis: { 
+        type: 'category', 
+        data: frames, 
+        name: 'frame',
+        axisPointer: {
+          value: 0,
+          snap: true
+        }
+      },
+      yAxis: [
+        {
+          type: 'value',
+          name: 'Z-Score Hyoid-C4 Distance',
+          nameLocation: 'middle',
+          nameGap: 40,
+          position: 'left',
+          splitLine: { 
+            show: true, 
+            lineStyle: { type: 'dashed', color: '#e0e0e0' } 
+          },
+          axisLine: { lineStyle: { color: '#9c88ff' } },
+          axisTick: { show: true }
+        },
+        {
+          type: 'value',
+          name: 'Z-Score UES Length',
+          nameLocation: 'middle',
+          nameGap: 40,
+          position: 'right',
+          splitLine: { show: false },
+          axisLine: { lineStyle: { color: '#ff9ff3' } },
+          axisTick: { show: true }
+        }
+      ],
+      series: [
+        { 
+          type: 'line', 
+          name: 'Z-Score Hyoid-C4 Distance', 
+          data: hyoidDistances, 
+          smooth: true,
+          lineStyle: { width: 3, color: '#9c88ff' },
+          itemStyle: { color: '#9c88ff' },
+          yAxisIndex: 0,
+          symbol: 'circle',
+          symbolSize: 4
+        },
+        { 
+          type: 'line', 
+          name: 'Z-Score UES Length', 
+          data: uesLengths, 
+          smooth: true,
+          lineStyle: { width: 3, color: '#ff9ff3' },
+          itemStyle: { color: '#ff9ff3' },
+          yAxisIndex: 1,
+          symbol: 'circle',
+          symbolSize: 4
+        }
+      ],
+      grid: { left: 60, right: 60, top: 120, bottom: 50 },
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'filter'
+        }
+      ],
+      toolbox: {
+        feature: {
+          dataZoom: { title: 'Zoom' },
+          restore: { title: 'Restore' },
+          saveAsImage: { title: 'Save' }
+        },
+        right: 20,
+        top: 20,
+        itemSize: 16,
+        itemGap: 8
+      }
+    };
+  }, [zScoreData]);
+
+  // 创建Z-score分析的Hyoid轨迹图表
+  const zScoreHyoidTrajectoryChartOption = useMemo(() => {
+    if (!zScoreData) return undefined;
+    
+    // 使用Z-score归一化后的数据，过滤掉无效数据
+    const validData = zScoreData.processedData
+      .map((area: any, frameIdx: number) => ({
+        frame: frameIdx,
+        x: area.zscore_hyoid_relative_x,
+        y: area.zscore_hyoid_relative_y,
+        valid: area.zscore_hyoid_relative_x !== null && 
+               area.zscore_hyoid_relative_y !== null
+      }))
+      .filter((item: any) => item.valid);
+    
+    if (!validData.length) return undefined;
+
+    // 分离轨迹点和连接线
+    const scatterData = validData.map((item: any) => [item.x, item.y]);
+    const lineData = validData.map((item: any) => [item.x, item.y]);
+
+    // 计算坐标范围，添加边距
+    const xValues = validData.map((item: any) => item.x!);
+    const yValues = validData.map((item: any) => item.y!);
+    const xRange = Math.max(...xValues) - Math.min(...xValues);
+    const yRange = Math.max(...yValues) - Math.min(...yValues);
+    const margin = Math.max(xRange, yRange) * 0.1; // 10%边距
+
+    return {
+      title: { 
+        text: 'Z-Score Normalized Hyoid Trajectory',
+        left: 'center',
+        top: 10,
+        textStyle: { fontSize: 18, fontWeight: 'bold' },
+        itemGap: 20
+      },
+      tooltip: {
+        trigger: 'item',
+        formatter: function(params: any) {
+          if (params.componentType === 'series') {
+            const dataIndex = params.dataIndex;
+            const item = validData[dataIndex];
+            return `Frame: ${item.frame}<br/>X: ${item.x?.toFixed(2)} Z-score<br/>Y: ${item.y?.toFixed(2)} Z-score<br/>Reference C2C4: ${zScoreData.reference.toFixed(2)} px`;
+          }
+          return '';
+        }
+      },
+      legend: { 
+        data: ['Z-Score Hyoid Position', 'Z-Score Trajectory'],
+        top: 60,
+        itemGap: 20,
+        textStyle: { fontSize: 12 }
+      },
+      grid: { 
+        left: 60, 
+        right: 20, 
+        top: 120, 
+        bottom: 50,
+        containLabel: true
+      },
+      xAxis: { 
+        type: 'value', 
+        name: 'Z-Score Relative X (perpendicular to C2C4)',
+        nameLocation: 'middle',
+        nameGap: 30,
+        min: Math.min(...xValues) - margin,
+        max: Math.max(...xValues) + margin,
+        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#e0e0e0' } },
+        axisLine: { lineStyle: { color: '#333' } },
+        axisTick: { show: true }
+      },
+      yAxis: { 
+        type: 'value', 
+        name: 'Z-Score Relative Y (along C2C4)',
+        nameLocation: 'middle',
+        nameGap: 40,
+        min: Math.min(...yValues) - margin,
+        max: Math.max(...yValues) + margin,
+        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#e0e0e0' } },
+        axisLine: { lineStyle: { color: '#333' } },
+        axisTick: { show: true }
+      },
+      series: [
+        { 
+          type: 'scatter', 
+          name: 'Z-Score Hyoid Position',
+          data: scatterData, 
+          symbolSize: function(value: any, params: any) {
+            // 根据帧数调整点的大小，让轨迹更清晰
+            const frameIdx = validData[params.dataIndex].frame;
+            if (frameIdx === 0) return 12; // 起始点更大
+            if (frameIdx === validData.length - 1) return 12; // 结束点更大
+            return 6; // 中间点较小
+          },
+          itemStyle: { 
+            color: function(params: any) {
+              // 根据帧数渐变颜色，显示运动方向
+              const frameIdx = validData[params.dataIndex].frame;
+              const progress = frameIdx / (validData.length - 1);
+              return `hsl(${200 + progress * 160}, 70%, 50%)`; // 从蓝色渐变到红色
+            }
+          },
+          emphasis: {
+            itemStyle: {
+              borderColor: '#fff',
+              borderWidth: 2,
+              shadowBlur: 10,
+              shadowColor: 'rgba(0,0,0,0.3)'
+            }
+          }
+        },
+        {
+          type: 'line',
+          name: 'Z-Score Trajectory',
+          data: lineData,
+          smooth: true,
+          lineStyle: { 
+            width: 3, 
+            color: '#4ecdc4',
+            shadowBlur: 5,
+            shadowColor: 'rgba(0,0,0,0.2)'
+          },
+          showSymbol: false,
+          emphasis: {
+            lineStyle: { width: 5 }
+          }
+        }
+      ],
+      // 添加数据缩放功能
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'filter'
+        },
+        {
+          type: 'inside',
+          yAxisIndex: 0,
+          filterMode: 'filter'
+        }
+      ],
+      // 添加工具箱
+      toolbox: {
+        feature: {
+          dataZoom: { title: 'Zoom' },
+          restore: { title: 'Restore' },
+          saveAsImage: { title: 'Save' }
+        },
+        right: 20,
+        top: 20,
+        itemSize: 16,
+        itemGap: 8
+      }
+    };
+  }, [zScoreData]);
+
+  // 创建综合分析的综合参数图表（使用相对变化率）
+  const comprehensiveChartOption = useMemo(() => {
+    if (!comprehensiveData) return undefined;
+    
+    const frames = comprehensiveData.processedData.length;
+    const x = Array.from({ length: frames }, (_, i) => i);
+    
+    // 使用相对变化率数据（所有参数都以百分比变化表示）
+    const pharynx = comprehensiveData.processedData.map((a: any) => a.relative_change_pharynx);
+    const vestibule = comprehensiveData.processedData.map((a: any) => a.relative_change_vestibule);
+    const bolusPharynxOverlap = comprehensiveData.processedData.map((a: any) => a.relative_change_bolus_pharynx_overlap);
+    const bolusVestibuleOverlap = comprehensiveData.processedData.map((a: any) => a.relative_change_bolus_vestibule_overlap);
+    const hyoidDistance = comprehensiveData.processedData.map((a: any) => a.relative_change_hyoid_c4_distance);
+    const uesLength = comprehensiveData.processedData.map((a: any) => a.relative_change_ues_length);
+
+    return {
+      title: { 
+        text: 'Comprehensive Analysis: Relative Change Rates (%)',
+        left: 'center',
+        top: 10,
+        textStyle: { fontSize: 16, fontWeight: 'bold' },
+        itemGap: 20
+      },
+      tooltip: { 
+        trigger: 'axis',
+        axisPointer: {
+          type: 'cross'
+        },
+        formatter: function(params: any) {
+          let tooltip = `Frame: ${params[0].axisValue}<br/>`;
+          tooltip += `Reference C2C4 Length: ${comprehensiveData.reference.toFixed(2)} px<br/>`;
+          params.forEach((param: any) => {
+            if (param.value !== null) {
+              tooltip += `${param.seriesName}: ${param.value.toFixed(2)}%<br/>`;
+            }
+          });
+          return tooltip;
+        }
+      },
+      legend: { 
+        data: [
+          'Pharynx Relative Change', 'Vestibule Relative Change', 
+          'Bolus-Pharynx Overlap Relative Change', 'Bolus-Vestibule Overlap Relative Change',
+          'Hyoid-C4 Distance Relative Change', 'UES Length Relative Change'
+        ],
+        top: 60,
+        itemGap: 20,
+        textStyle: { fontSize: 12 }
+      },
+      xAxis: { 
+        type: 'category', 
+        data: x, 
+        name: 'frame',
+        axisPointer: {
+          value: 0,
+          snap: true
+        }
+      },
+      yAxis: {
+        type: 'value',
+        name: 'Relative Change Rate (%)',
+        nameLocation: 'middle',
+        nameGap: 40,
+        splitLine: { 
+          show: true, 
+          lineStyle: { type: 'dashed', color: '#e0e0e0' } 
+        },
+        axisLine: { lineStyle: { color: '#333' } },
+        axisTick: { show: true },
+        axisLabel: {
+          formatter: function(value: number) {
+            return value.toFixed(1) + '%';
+          }
+        }
+      },
+      series: [
+        { 
+          type: 'line', 
+          name: 'Pharynx Relative Change', 
+          data: pharynx, 
+          smooth: true,
+          lineStyle: { width: 2, color: '#ff6b6b' },
+          itemStyle: { color: '#ff6b6b' }
+        },
+        { 
+          type: 'line', 
+          name: 'Vestibule Relative Change', 
+          data: vestibule, 
+          smooth: true,
+          lineStyle: { width: 2, color: '#4ecdc4' },
+          itemStyle: { color: '#4ecdc4' }
+        },
+        { 
+          type: 'line', 
+          name: 'Bolus-Pharynx Overlap Relative Change', 
+          data: bolusPharynxOverlap, 
+          smooth: true,
+          lineStyle: { width: 2, type: 'dashed', color: '#45b7d1' },
+          itemStyle: { color: '#45b7d1' }
+        },
+        { 
+          type: 'line', 
+          name: 'Bolus-Vestibule Overlap Relative Change', 
+          data: bolusVestibuleOverlap, 
+          smooth: true,
+          lineStyle: { width: 2, type: 'dashed', color: '#96ceb4' },
+          itemStyle: { color: '#96ceb4' }
+        },
+        { 
+          type: 'line', 
+          name: 'Hyoid-C4 Distance Relative Change', 
+          data: hyoidDistance, 
+          smooth: true,
+          lineStyle: { width: 2, color: '#9c88ff' },
+          itemStyle: { color: '#9c88ff' }
+        },
+        { 
+          type: 'line', 
+          name: 'UES Length Relative Change', 
+          data: uesLength, 
+          smooth: true,
+          lineStyle: { width: 2, color: '#ff9ff3' },
+          itemStyle: { color: '#ff9ff3' }
+        }
+      ],
+      grid: { left: 60, right: 20, top: 120, bottom: 50 },
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'filter'
+        }
+      ],
+      toolbox: {
+        feature: {
+          dataZoom: { title: 'Zoom' },
+          restore: { title: 'Restore' },
+          saveAsImage: { title: 'Save' }
+        },
+        right: 20,
+        top: 20,
+        itemSize: 16,
+        itemGap: 8
+      }
+    };
+  }, [comprehensiveData]);
+
+  return (
+    <div style={{ 
+      width: '100%', 
+      minHeight: '100vh',
+      margin: '0 auto', 
+      fontFamily: 'system-ui, sans-serif',
+      padding: '20px',
+      boxSizing: 'border-box'
+    }}>
+      <h2 style={{ textAlign: 'center', marginBottom: '30px' }}>VFSS Analysis Frontend</h2>
+
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr 1fr', alignItems: 'end' }}>
+        <div>
+          <label>Video file</label>
+          <input type="file" accept="video/*" onChange={e => setFile(e.target.files?.[0] || null)} />
+        </div>
+        <div>
+          <label>poly_thresh</label>
+          <input type="number" step="0.05" min={0} max={1} value={polyThresh}
+                 onChange={e => setPolyThresh(parseFloat(e.target.value))} />
+        </div>
+        <div>
+          <label>point_thresh</label>
+          <input type="number" step="0.05" min={0} max={1} value={pointThresh}
+                 onChange={e => setPointThresh(parseFloat(e.target.value))} />
+        </div>
+        <div>
+          <label>point_radius</label>
+          <input type="number" min={1} max={50} value={pointRadius}
+                 onChange={e => setPointRadius(parseInt(e.target.value || '6', 10))} />
+        </div>
+        <div>
+          <button disabled={submitting} onClick={onSubmit}>Submit</button>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 10 }}>
+        <div>Backend: {BACKEND}</div>
+        <div>Job: {jobId || '-'}</div>
+        <div>Status: {jobStatus || '-'}</div>
+        
+        {/* 分析进度条 */}
+        {jobStatus === 'running' && (
+          <div style={{ marginTop: '15px' }}>
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center',
+              marginBottom: '8px'
+            }}>
+              <span style={{ fontSize: '14px', color: '#666' }}>
+                🔄 视频分析进行中...
+              </span>
+              <span style={{ fontSize: '14px', color: '#007bff', fontWeight: 'bold' }}>
+                {analysisProgress}%
+              </span>
+            </div>
+            <div style={{
+              width: '100%',
+              height: '12px',
+              backgroundColor: '#e9ecef',
+              borderRadius: '6px',
+              overflow: 'hidden',
+              border: '1px solid #dee2e6'
+            }}>
+              <div style={{
+                width: `${analysisProgress}%`,
+                height: '100%',
+                backgroundColor: '#007bff',
+                borderRadius: '6px',
+                transition: 'width 0.5s ease',
+                background: 'linear-gradient(90deg, #007bff 0%, #0056b3 100%)',
+                boxShadow: '0 2px 4px rgba(0,123,255,0.3)'
+              }} />
+            </div>
+            <div style={{ 
+              marginTop: '8px', 
+              fontSize: '12px', 
+              color: '#888',
+              fontStyle: 'italic'
+            }}>
+              正在处理视频帧、执行模型推理、生成分析结果...
+            </div>
+          </div>
+        )}
+      </div>
+
+      {summary && (
+        <>
+          <div style={{ marginTop: 20 }}>
+            <button onClick={downloadCsv}>Download signals.csv</button>
+          </div>
+
+          {/* 数据统计面板 - 全屏显示 */}
+          <div style={{ 
+            marginTop: 20, 
+            padding: '16px', 
+            border: '1px solid #ddd', 
+            borderRadius: '8px',
+            backgroundColor: '#f9f9f9',
+            width: '100%'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ margin: 0, color: '#333' }}>Analysis Summary</h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span style={{ fontSize: '14px', color: '#666' }}>Data Display:</span>
+                <button 
+                  onClick={() => setShowNormalized(false)}
+                  style={{
+                    padding: '6px 12px',
+                    border: 'none',
+                    borderRadius: '4px',
+                    backgroundColor: !showNormalized ? '#007bff' : '#e9ecef',
+                    color: !showNormalized ? 'white' : '#666',
+                    cursor: 'pointer',
+                    fontSize: '12px'
+                  }}
+                >
+                  Original
+                </button>
+                <button 
+                  onClick={() => setShowNormalized(true)}
+                  style={{
+                    padding: '6px 12px',
+                    border: 'none',
+                    borderRadius: '4px',
+                    backgroundColor: showNormalized ? '#28a745' : '#e9ecef',
+                    color: showNormalized ? 'white' : '#666',
+                    cursor: 'pointer',
+                    fontSize: '12px'
+                  }}
+                >
+                  Normalized
+                </button>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+              <div>
+                <strong>Total Frames:</strong> {summary.frames}
+              </div>
+              <div>
+                <strong>Video FPS:</strong> {summary.fps || 'Unknown'} FPS
+              </div>
+              <div>
+                <strong>Coordinate System Valid:</strong> 
+                <span style={{ color: summary.signals?.areas?.some(a => a.coordinate_system_valid) ? '#28a745' : '#dc3545' }}>
+                  {summary.signals?.areas?.some(a => a.coordinate_system_valid) ? 'Yes' : 'No'}
+                </span>
+              </div>
+              <div>
+                <strong>Bolus Tracking:</strong> 
+                <span style={{ color: summary.signals?.areas?.some(a => a.bolus_track_valid) ? '#28a745' : '#dc3545' }}>
+                  {summary.signals?.areas?.some(a => a.bolus_track_valid) ? 'Active' : 'Inactive'}
+                </span>
+              </div>
+              <div>
+                <strong>Valid Hyoid Data:</strong> 
+                {summary.signals?.areas?.filter(a => a.hyoid_relative_x !== null && a.hyoid_relative_y !== null).length || 0} / {summary.frames}
+              </div>
+              <div>
+                <strong>Valid UES Length Data:</strong> 
+                {summary.signals?.areas?.filter(a => a.ues_length !== null).length || 0} / {summary.frames}
+              </div>
+              {showNormalized && normalizedData && (
+                <>
+                  <div>
+                    <strong>Reference C2C4 Length:</strong> {normalizedData.reference.toFixed(2)} px
+                  </div>
+                  <div>
+                    <strong>Normalization Status:</strong> 
+                    <span style={{ color: '#28a745' }}>Active</span>
+                  </div>
+                  <div>
+                    <strong>Valid C2C4 Data:</strong> 
+                    {summary.signals?.areas?.filter(a => a.c2c4_length !== null && a.c2c4_length > 0).length || 0} / {summary.frames}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* 特殊时刻帧展示 - 全屏显示 */}
+          <div style={{ marginTop: 24, width: '100%' }}>
+            <h3 style={{ margin: '0 0 16px 0', color: '#333', textAlign: 'center' }}>
+              Special Moment Frames Analysis
+            </h3>
+            <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', width: '100%' }}>
+              {/* 特殊时刻帧展示 */}
+              <div style={{ 
+                display: 'grid', 
+                gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+                gap: '20px',
+                width: 'calc(100% - 274px)'
+              }}>
+                {calculateSpecialMoments.map((moment, index) => {
+                  const fps = summary.fps || 30;
+                  const timeInSeconds = moment.frame_index / fps;
+                  const minutes = Math.floor(timeInSeconds / 60);
+                  const seconds = (timeInSeconds % 60).toFixed(2);
+                  const timeString = `${minutes}:${seconds.padStart(5, '0')}`;
+                  
+                  return (
+                    <div key={index} style={{ 
+                      border: '2px solid #4ecdc4', 
+                      borderRadius: '12px',
+                      padding: '16px',
+                      backgroundColor: '#f8f9fa',
+                      textAlign: 'center',
+                      boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+                      minHeight: '350px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between'
+                    }}>
+                      <div style={{ 
+                        fontSize: '16px', 
+                        fontWeight: 'bold', 
+                        marginBottom: '12px',
+                        padding: '10px',
+                        backgroundColor: '#4ecdc4',
+                        color: 'white',
+                        borderRadius: '6px'
+                      }}>
+                        {moment.frame_name}
+                      </div>
+                      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {moment.overlay_url ? (
+                          <img 
+                            src={moment.overlay_url} 
+                            width="100%" 
+                            height="auto"
+                            style={{ 
+                              borderRadius: '8px', 
+                              border: '1px solid #ddd',
+                              maxWidth: '300px'
+                            }}
+                            alt={`Frame ${moment.frame_index}`}
+                          />
+                        ) : (
+                          <div style={{ 
+                            width: '100%', 
+                            maxWidth: '300px',
+                            height: '300px',
+                            backgroundColor: '#e9ecef',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            borderRadius: '8px',
+                            border: '1px solid #ddd'
+                          }}>
+                            No overlay
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ 
+                        marginTop: '12px',
+                        fontSize: '13px',
+                        color: '#6c757d',
+                        fontFamily: 'monospace',
+                        padding: '8px',
+                        backgroundColor: '#e9ecef',
+                        borderRadius: '6px'
+                      }}>
+                        可见第{moment.frame_index}帧 - {timeString}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              
+              {/* 颜色图例说明 */}
+              <div style={{ 
+                width: '250px',
+                padding: '20px',
+                backgroundColor: '#f8f9fa',
+                borderRadius: '12px',
+                border: '2px solid #e9ecef',
+                position: 'sticky',
+                top: '20px',
+                height: 'fit-content',
+                flexShrink: 0
+              }}>
+                <h4 style={{ 
+                  margin: '0 0 20px 0', 
+                  color: '#333',
+                  textAlign: 'center',
+                  fontSize: '18px',
+                  fontWeight: 'bold'
+                }}>
+                  ROI颜色说明
+                </h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {/* 点类ROI */}
+                  <div>
+                    <div style={{ 
+                      fontSize: '15px', 
+                      fontWeight: 'bold', 
+                      color: '#2c3e50',
+                      marginBottom: '12px',
+                      borderBottom: '2px solid #dee2e6',
+                      paddingBottom: '6px'
+                    }}>
+                      点类标记
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ 
+                          width: '18px', 
+                          height: '18px', 
+                          backgroundColor: '#ff0000', 
+                          borderRadius: '50%',
+                          border: '2px solid #fff',
+                          boxShadow: '0 0 0 1px #000'
+                        }}></div>
+                        <span style={{ fontSize: '13px' }}>UESout (红色)</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ 
+                          width: '18px', 
+                          height: '18px', 
+                          backgroundColor: '#00ff00', 
+                          borderRadius: '50%',
+                          border: '2px solid #fff',
+                          boxShadow: '0 0 0 1px #000'
+                        }}></div>
+                        <span style={{ fontSize: '13px' }}>UESin (绿色)</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ 
+                          width: '18px', 
+                          height: '18px', 
+                          backgroundColor: '#0000ff', 
+                          borderRadius: '50%',
+                          border: '2px solid #fff',
+                          boxShadow: '0 0 0 1px #000'
+                        }}></div>
+                        <span style={{ fontSize: '13px' }}>C2 (蓝色)</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ 
+                          width: '18px', 
+                          height: '18px', 
+                          backgroundColor: '#00ffff', 
+                          borderRadius: '50%',
+                          border: '2px solid #fff',
+                          boxShadow: '0 0 0 1px #000'
+                        }}></div>
+                        <span style={{ fontSize: '13px' }}>C4 (黄色)</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ 
+                          width: '18px', 
+                          height: '18px', 
+                          backgroundColor: '#ff00ff', 
+                          borderRadius: '50%',
+                          border: '2px solid #fff',
+                          boxShadow: '0 0 0 1px #000'
+                        }}></div>
+                        <span style={{ fontSize: '13px' }}>hyoid (紫色)</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* 多边形类ROI */}
+                  <div>
+                    <div style={{ 
+                      fontSize: '15px', 
+                      fontWeight: 'bold', 
+                      color: '#2c3e50',
+                      marginBottom: '12px',
+                      borderBottom: '2px solid #dee2e6',
+                      paddingBottom: '6px'
+                    }}>
+                      多边形区域
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ 
+                          width: '18px', 
+                          height: '18px', 
+                          backgroundColor: '#ffff00', 
+                          borderRadius: '2px'
+                        }}></div>
+                        <span style={{ fontSize: '13px' }}>pharynx (青色)</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ 
+                          width: '18px', 
+                          height: '18px', 
+                          backgroundColor: '#ff8000', 
+                          borderRadius: '2px'
+                        }}></div>
+                        <span style={{ fontSize: '13px' }}>vestibule (橙色)</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ 
+                          width: '18px', 
+                          height: '18px', 
+                          backgroundColor: '#ff0080', 
+                          borderRadius: '2px'
+                        }}></div>
+                        <span style={{ fontSize: '13px' }}>bolus (粉色)</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* 说明文字 */}
+                  <div style={{ 
+                    fontSize: '12px', 
+                    color: '#6c757d',
+                    fontStyle: 'italic',
+                    textAlign: 'center',
+                    padding: '10px',
+                    backgroundColor: '#e9ecef',
+                    borderRadius: '6px',
+                    marginTop: '12px'
+                  }}>
+                    颜色对应后端LABEL_COLORS_BGR定义
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 三个图表 - 居中显示且宽度为屏幕的一半 */}
+          <div style={{ marginTop: 24 }}>
+            {showNormalized ? (
+              // 显示归一化图表
+              normalizedAreaChartOption && (
+                <div style={{ display: 'flex', justifyContent: 'center' }}>
+                  <div style={{ width: '50%', minWidth: '600px' }}>
+                    <ReactECharts option={normalizedAreaChartOption} style={{ height: 500 }} />
+                  </div>
+                </div>
+              )
+            ) : (
+              // 显示原始图表
+              areaChartOption && (
+                <div style={{ display: 'flex', justifyContent: 'center' }}>
+                  <div style={{ width: '50%', minWidth: '600px' }}>
+                    <ReactECharts option={areaChartOption} style={{ height: 500 }} />
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+          <div style={{ marginTop: 24 }}>
+            {showNormalized ? (
+              // 显示归一化图表
+              normalizedHyoidDistanceChartOption && (
+                <div style={{ display: 'flex', justifyContent: 'center' }}>
+                  <div style={{ width: '50%', minWidth: '600px' }}>
+                    <ReactECharts option={normalizedHyoidDistanceChartOption} style={{ height: 360 }} />
+                  </div>
+                </div>
+              )
+            ) : (
+              // 显示原始图表
+              hyoidDistanceChartOption && (
+                <div style={{ display: 'flex', justifyContent: 'center' }}>
+                  <div style={{ width: '50%', minWidth: '600px' }}>
+                    <ReactECharts option={hyoidDistanceChartOption} style={{ height: 360 }} />
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+          <div style={{ marginTop: 24 }}>
+            {bolusTrajectoryChartOption && (
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <div style={{ width: '50%', minWidth: '600px' }}>
+                  <ReactECharts option={bolusTrajectoryChartOption} style={{ height: 360 }} />
+                </div>
+              </div>
+            )}
+          </div>
+          <div style={{ marginTop: 24 }}>
+            {hyoidChartOption && (
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <div style={{ width: '50%', minWidth: '600px' }}>
+                  <ReactECharts option={hyoidChartOption} style={{ height: 360 }} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 高级分析询问区域 */}
+          {!showAdvancedAnalysis && summary && (
+            <div style={{ 
+              marginTop: 40, 
+              padding: '30px', 
+              border: '2px solid #28a745', 
+              borderRadius: '12px',
+              backgroundColor: '#f8fff9',
+              textAlign: 'center',
+              width: '100%'
+            }}>
+              <h3 style={{ 
+                margin: '0 0 20px 0', 
+                color: '#28a745',
+                fontSize: '24px',
+                fontWeight: 'bold'
+              }}>
+                🎯 基础分析已完成！
+              </h3>
+              <p style={{ 
+                margin: '0 0 25px 0', 
+                color: '#666',
+                fontSize: '16px',
+                lineHeight: '1.6'
+              }}>
+                已完成对原始数据的分析，包括视频分帧、模型推理、特殊帧展示和运动曲线等基础功能。
+                <br />
+                <strong>请选择是否进行综合分析：</strong>
+              </p>
+              <div style={{ display: 'flex', justifyContent: 'center', gap: '20px', flexWrap: 'wrap' }}>
+
+                <button 
+                  onClick={handleComprehensiveAnalysis}
+                  disabled={processingComprehensive}
+                  style={{
+                    padding: '15px 30px',
+                    border: 'none',
+                    borderRadius: '8px',
+                    backgroundColor: '#fd7e14',
+                    color: 'white',
+                    fontSize: '16px',
+                    fontWeight: 'bold',
+                    cursor: processingComprehensive ? 'not-allowed' : 'pointer',
+                    opacity: processingComprehensive ? 0.6 : 1,
+                    transition: 'all 0.3s ease'
+                  }}
+                >
+                  {processingComprehensive ? '🔄 处理中...' : '🎯 综合分析（推荐）'}
+                </button>
+                <button 
+                  style={{
+                    padding: '15px 30px',
+                    border: '2px solid #6c757d',
+                    borderRadius: '8px',
+                    backgroundColor: 'transparent',
+                    color: '#6c757d',
+                    fontSize: '16px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    transition: 'all 0.3s ease'
+                  }}
+                >
+                  ❌ 否，到此结束
+                </button>
+              </div>
+              <div style={{ 
+                marginTop: '20px',
+                fontSize: '14px',
+                color: '#888',
+                fontStyle: 'italic'
+              }}>
+                <strong>综合分析：</strong>SG平滑 + C2C4归一化 + 相对变化率标准化（百分比变化，便于跨量纲比较和参数提取）
+              </div>
+            </div>
+          )}
+
+
+            <>
+              <div style={{ 
+                marginTop: 40, 
+                padding: '20px', 
+                border: '2px solid #007bff', 
+                borderRadius: '12px',
+                backgroundColor: '#f0f8ff',
+                textAlign: 'center',
+                width: '100%'
+              }}>
+                <h3 style={{ 
+                  margin: '0 0 15px 0', 
+                  color: '#007bff',
+                  fontSize: '22px',
+                  fontWeight: 'bold'
+                }}>
+                  🚀 高级分析完成！
+                </h3>
+                <p style={{ 
+                  margin: '0 0 15px 0', 
+                  color: '#666',
+                  fontSize: '14px'
+                }}>
+                  已应用Savitzky-Golay平滑滤波（2阶）和增强的C2C4长度归一化处理
+                  <br />
+                  Reference C2C4 Length: <strong>{advancedData.reference.toFixed(2)} px</strong>
+                </p>
+                <button 
+                  onClick={() => generateAdvancedCSV(advancedData)}
+                  style={{
+                    padding: '10px 20px',
+                    border: 'none',
+                    borderRadius: '6px',
+                    backgroundColor: '#007bff',
+                    color: 'white',
+                    fontSize: '14px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer'
+                  }}
+                >
+                  📥 下载高级分析CSV
+                </button>
+              </div>
+
+              <div style={{ marginTop: 24 }}>
+                {advancedAreaChartOption && (
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    <div style={{ width: '50%', minWidth: '600px' }}>
+                      <ReactECharts option={advancedAreaChartOption} style={{ height: 500 }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div style={{ marginTop: 24 }}>
+                {advancedHyoidDistanceChartOption && (
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    <div style={{ width: 'flex', justifyContent: 'center' }}>
+                      <div style={{ width: '50%', minWidth: '600px' }}>
+                        <ReactECharts option={advancedHyoidDistanceChartOption} style={{ height: 360 }} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div style={{ marginTop: 24 }}>
+                {advancedHyoidTrajectoryChartOption && (
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    <div style={{ width: '50%', minWidth: '600px' }}>
+                      <ReactECharts option={advancedHyoidTrajectoryChartOption} style={{ height: 360 }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Z-score分析询问区域 */}
+              {!showZScoreAnalysis && (
+                <div style={{ 
+                  marginTop: 40, 
+                  padding: '30px', 
+                  border: '2px solid #6f42c1', 
+                  borderRadius: '12px',
+                  backgroundColor: '#f8f5ff',
+                  textAlign: 'center',
+                  width: '100%'
+                }}>
+                  <h3 style={{ 
+                    margin: '0 0 20px 0', 
+                    color: '#6f42c1',
+                    fontSize: '24px',
+                    fontWeight: 'bold'
+                  }}>
+                    🎯 高级分析已完成！
+                  </h3>
+                  <p style={{ 
+                    margin: '0 0 25px 0', 
+                    color: '#666',
+                    fontSize: '16px',
+                    lineHeight: '1.6'
+                  }}>
+                    已完成Savitzky-Golay平滑滤波和C2C4长度归一化处理。
+                    <br />
+                    <strong>是否需要进行Z-score标准化分析？</strong>
+                  </p>
+                  <div style={{ display: 'flex', justifyContent: 'center', gap: '20px' }}>
+                    <button 
+                      onClick={handleZScoreAnalysis}
+                      disabled={processingZScore}
+                      style={{
+                        padding: '15px 30px',
+                        border: 'none',
+                        borderRadius: '8px',
+                        backgroundColor: '#6f42c1',
+                        color: 'white',
+                        fontSize: '16px',
+                        fontWeight: 'bold',
+                        cursor: processingZScore ? 'not-allowed' : 'pointer',
+                        opacity: processingZScore ? 0.6 : 1,
+                        transition: 'all 0.3s ease'
+                      }}
+                    >
+                      {processingZScore ? '🔄 处理中...' : '✅ 是，继续Z-score分析'}
+                    </button>
+                    <button 
+                      style={{
+                        padding: '15px 30px',
+                        border: '2px solid #6c757d',
+                        borderRadius: '8px',
+                        backgroundColor: 'transparent',
+                        color: '#6c757d',
+                        fontSize: '16px',
+                        fontWeight: 'bold',
+                        cursor: 'pointer',
+                        transition: 'all 0.3s ease'
+                      }}
+                    >
+                      ❌ 否，到此结束
+                    </button>
+                  </div>
+                  <div style={{ 
+                    marginTop: '20px',
+                    fontSize: '14px',
+                    color: '#888',
+                    fontStyle: 'italic'
+                  }}>
+                    Z-score分析将包括：对所有归一化数据进行标准化处理，提供统计可比性
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* 综合分析结果展示 */}
+          {showComprehensiveAnalysis && comprehensiveData && (
+            <>
+              <div style={{ 
+                marginTop: 40, 
+                padding: '20px', 
+                border: '2px solid #fd7e14', 
+                borderRadius: '12px',
+                backgroundColor: '#fff8f0',
+                textAlign: 'center',
+                width: '100%'
+              }}>
+                <h3 style={{ 
+                  margin: '0 0 15px 0', 
+                  color: '#fd7e14',
+                  fontSize: '22px',
+                  fontWeight: 'bold'
+                }}>
+                  🎯 综合分析完成！
+                </h3>
+                <p style={{ 
+                  margin: '0 0 15px 0', 
+                  color: '#666',
+                  fontSize: '14px'
+                }}>
+                  已完成SG平滑、C2C4归一化和相对变化率标准化处理
+                  <br />
+                  Reference C2C4 Length: <strong>{comprehensiveData.reference.toFixed(2)} px</strong>
+                  <br />
+                  所有参数均以相对于其均值的百分比变化表示，便于跨量纲比较
+                </p>
+                <button 
+                  onClick={() => generateComprehensiveCSV(comprehensiveData)}
+                  style={{
+                    padding: '10px 20px',
+                    border: 'none',
+                    borderRadius: '6px',
+                    backgroundColor: '#fd7e14',
+                    color: 'white',
+                    fontSize: '14px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer'
+                  }}
+                >
+                  📥 下载综合分析CSV
+                </button>
+              </div>
+
+              <div style={{ marginTop: 24 }}>
+                {comprehensiveChartOption && (
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    <div style={{ width: '50%', minWidth: '600px' }}>
+                      <ReactECharts option={comprehensiveChartOption} style={{ height: 500 }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* Z-score分析结果展示 */}
+          {showZScoreAnalysis && zScoreData && (
+            <>
+              <div style={{ 
+                marginTop: 40, 
+                padding: '20px', 
+                border: '2px solid #6f42c1', 
+                borderRadius: '12px',
+                backgroundColor: '#f8f5ff',
+                textAlign: 'center',
+                width: '100%'
+              }}>
+                <h3 style={{ 
+                  margin: '0 0 15px 0', 
+                  color: '#6f42c1',
+                  fontSize: '22px',
+                  fontWeight: 'bold'
+                }}>
+                  🎯 Z-score分析完成！
+                </h3>
+                <p style={{ 
+                  margin: '0 0 15px 0', 
+                  color: '#666',
+                  fontSize: '14px'
+                }}>
+                  已对所有归一化数据应用Z-score标准化处理
+                  <br />
+                  Reference C2C4 Length: <strong>{zScoreData.reference.toFixed(2)} px</strong>
+                </p>
+                <button 
+                  onClick={() => generateZScoreCSV(zScoreData)}
+                  style={{
+                    padding: '10px 20px',
+                    border: 'none',
+                    borderRadius: '6px',
+                    backgroundColor: '#6f42c1',
+                    color: 'white',
+                    fontSize: '14px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer'
+                  }}
+                >
+                  📥 下载Z-score分析CSV
+                </button>
+              </div>
+
+              <div style={{ marginTop: 24 }}>
+                {zScoreAreaChartOption && (
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    <div style={{ width: '50%', minWidth: '600px' }}>
+                      <ReactECharts option={zScoreAreaChartOption} style={{ height: 500 }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div style={{ marginTop: 24 }}>
+                {zScoreHyoidDistanceChartOption && (
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    <div style={{ width: '50%', minWidth: '600px' }}>
+                      <ReactECharts option={zScoreHyoidDistanceChartOption} style={{ height: 360 }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div style={{ marginTop: 24 }}>
+                {zScoreHyoidTrajectoryChartOption && (
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    <div style={{ width: '50%', minWidth: '600px' }}>
+                      <ReactECharts option={zScoreHyoidTrajectoryChartOption} style={{ height: 360 }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+export default App;
