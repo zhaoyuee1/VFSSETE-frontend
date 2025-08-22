@@ -4,6 +4,12 @@ import ReactECharts from 'echarts-for-react';
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
 
+// 调试信息：检查环境变量
+console.log('Environment Variables Debug:');
+console.log('VITE_BACKEND_URL:', import.meta.env.VITE_BACKEND_URL);
+console.log('All env vars:', import.meta.env);
+console.log('Final BACKEND URL:', BACKEND);
+
 // Savitzky-Golay平滑滤波函数
 const savitzkyGolayFilter = (data: number[], windowSize: number = 5, order: number = 2): number[] => {
   if (data.length < windowSize) return data;
@@ -3156,7 +3162,7 @@ function App() {
                 fontSize: '24px',
                 fontWeight: 'bold'
               }}>
-                🎯 基础分析已完成！
+                 基础分析已完成！
               </h3>
               <p style={{ 
                 margin: '0 0 25px 0', 
@@ -3268,7 +3274,7 @@ function App() {
                   fontSize: '22px',
                   fontWeight: 'bold'
                 }}>
-                  🚀 高级分析完成！
+                   高级分析完成！
                 </h3>
                 <p style={{ 
                   margin: '0 0 15px 0', 
@@ -3295,7 +3301,7 @@ function App() {
                     cursor: 'pointer'
                   }}
                 >
-                  📥 下载高级分析CSV
+                   下载高级分析CSV
                 </button>
               </div>
 
@@ -3325,7 +3331,7 @@ function App() {
                   fontSize: '16px',
                   fontWeight: 'bold'
                 }}>
-                  🔍 调试信息
+                   调试信息
                 </h4>
                 <div style={{ 
                   display: 'grid', 
@@ -3448,7 +3454,7 @@ function App() {
                     fontWeight: 'bold',
                     textAlign: 'center'
                   }}>
-                    🍽️ 吞咽周期分析结果
+                    吞咽周期分析结果
                   </h3>
                   
                   <div style={{ 
@@ -3672,7 +3678,7 @@ function App() {
                       fontWeight: 'bold',
                       textAlign: 'center'
                     }}>
-                      ⏱️ 时间学参数分析
+                       时间学参数分析
                     </h3>
                     
                     <div style={{ overflowX: 'auto' }}>
