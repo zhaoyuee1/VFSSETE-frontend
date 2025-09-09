@@ -146,6 +146,28 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     }
   }
   
+  // 会厌谿/梨状窦残留检测
+  // 在吞咽结束帧(SWALLOW REST)检测残留
+  let residueRisk = null;
+  let residueRatio = null;
+  
+  if (endFrame < processedData.length) {
+    const endFrameData = processedData[endFrame];
+    if (endFrameData && 
+        endFrameData.normalized_bolus_pharynx_overlap !== null && 
+        endFrameData.normalized_pharynx !== null &&
+        endFrameData.normalized_pharynx > 0) {
+      
+      residueRatio = endFrameData.normalized_bolus_pharynx_overlap / endFrameData.normalized_pharynx;
+      const residueThreshold = 0.2;
+      residueRisk = residueRatio >= residueThreshold;
+      
+      console.log(`周期 ${cycleNumber}: 会厌谿/梨状窦残留检测 - 结束帧${endFrame}`);
+      console.log(`   bolus_pharynx_overlap=${endFrameData.normalized_bolus_pharynx_overlap.toFixed(3)}, pharynx=${endFrameData.normalized_pharynx.toFixed(3)}`);
+      console.log(`   残留比值=${residueRatio.toFixed(3)}, 阈值=${residueThreshold}, 存在残留=${residueRisk}`);
+    }
+  }
+  
   // 参数3: HYB (Hyoid Burst Onset) 检测
   // 检测hyoid_c4_distance突然增加的起始帧
   const hyoidC4Distance = cycleData.map(row => row.zscore_hyoid_c4_distance).filter(val => val !== null);
@@ -155,16 +177,27 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
   let HYB_valleyFrame = null;
   let HYB_peakValue = null;
   let HYB_valleyValue = null;
+  let HYB_normalizedValue = null;
+  let MHY_normalized_hyoid_relative_x = null;
+  let MHY_normalized_hyoid_relative_y = null;
+  let MHY_normalized_hyoid_c4_distance = null;
+  let HYB_normalized_hyoid_relative_x = null;
+  let HYB_normalized_hyoid_relative_y = null;
+  let HYB_normalized_hyoid_c4_distance = null;
   
   // UESO和UESC参数
   let UESO = null;
   let UESC = null;
   let UES_peakFrame = null;
   let UES_peakValue = null;
+  let UES_peakNormalizedValue = null;
   let UES_beforeValleyFrame = null;
   let UES_afterValleyFrame = null;
   let UES_beforeValleyValue = null;
   let UES_afterValleyValue = null;
+  let UESO_normalizedValue = null;
+  let UESmax_normalizedValue = null;
+  let UESC_normalizedValue = null;
   
   // LVC和LVCoff参数
   let LVC = null;
@@ -269,6 +302,33 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     // 4. HYB就是谷底帧（峰值前的第一个谷底）
     HYB = startFrame + valleyIndex;
     
+    // 获取HYB帧对应的normalized值
+    const hyoidC4DistanceNormalized = cycleData.map(row => row.normalized_hyoid_c4_distance).filter(val => val !== null);
+    const hyoidRelativeXNormalized = cycleData.map(row => row.normalized_hyoid_relative_x).filter(val => val !== null);
+    const hyoidRelativeYNormalized = cycleData.map(row => row.normalized_hyoid_relative_y).filter(val => val !== null);
+    
+    if (hyoidC4DistanceNormalized.length > 0 && valleyIndex < hyoidC4DistanceNormalized.length) {
+      HYB_normalizedValue = hyoidC4DistanceNormalized[valleyIndex];
+      HYB_normalized_hyoid_c4_distance = hyoidC4DistanceNormalized[valleyIndex];
+    }
+    if (hyoidRelativeXNormalized.length > 0 && valleyIndex < hyoidRelativeXNormalized.length) {
+      HYB_normalized_hyoid_relative_x = hyoidRelativeXNormalized[valleyIndex];
+    }
+    if (hyoidRelativeYNormalized.length > 0 && valleyIndex < hyoidRelativeYNormalized.length) {
+      HYB_normalized_hyoid_relative_y = hyoidRelativeYNormalized[valleyIndex];
+    }
+    
+    // 获取MHY帧对应的normalized值
+    if (hyoidC4DistanceNormalized.length > 0 && maxIndex < hyoidC4DistanceNormalized.length) {
+      MHY_normalized_hyoid_c4_distance = hyoidC4DistanceNormalized[maxIndex];
+    }
+    if (hyoidRelativeXNormalized.length > 0 && maxIndex < hyoidRelativeXNormalized.length) {
+      MHY_normalized_hyoid_relative_x = hyoidRelativeXNormalized[maxIndex];
+    }
+    if (hyoidRelativeYNormalized.length > 0 && maxIndex < hyoidRelativeYNormalized.length) {
+      MHY_normalized_hyoid_relative_y = hyoidRelativeYNormalized[maxIndex];
+    }
+    
     console.log(`周期 ${cycleNumber}: HYB检测完成`);
     console.log(`   峰值: 帧${HYB_peakFrame}, 值=${HYB_peakValue.toFixed(3)}`);
     console.log(`   谷底: 帧${HYB_valleyFrame}, 值=${HYB_valleyValue.toFixed(3)}`);
@@ -293,6 +353,12 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     
     UES_peakValue = maxValue;
     UES_peakFrame = startFrame + maxIndex;
+    
+    // 同时获取normalized数据的峰值
+    const uesLengthNormalized = cycleData.map(row => row.normalized_ues_length).filter(val => val !== null);
+    if (uesLengthNormalized.length > 0 && maxIndex < uesLengthNormalized.length) {
+      UES_peakNormalizedValue = uesLengthNormalized[maxIndex];
+    }
     
     // 2. 计算一阶差分（斜率）来识别谷底
     const diffData: number[] = [];
@@ -377,6 +443,11 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     UES_beforeValleyFrame = startFrame + beforeValleyIndex;
     UESO = startFrame + beforeValleyIndex;
     
+    // 获取UESO帧对应的normalized值
+    if (beforeValleyIndex < uesLengthNormalized.length) {
+      UESO_normalizedValue = uesLengthNormalized[beforeValleyIndex];
+    }
+    
     // 5. 找到峰值后的谷底（UESC）
     let afterValleyValue = maxValue;
     let afterValleyIndex = maxIndex;
@@ -423,6 +494,16 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     UES_afterValleyFrame = startFrame + afterValleyIndex;
     UESC = startFrame + afterValleyIndex;
     
+    // 获取UESC帧对应的normalized值
+    if (afterValleyIndex < uesLengthNormalized.length) {
+      UESC_normalizedValue = uesLengthNormalized[afterValleyIndex];
+    }
+    
+    // 获取UESmax帧对应的normalized值
+    if (maxIndex < uesLengthNormalized.length) {
+      UESmax_normalizedValue = uesLengthNormalized[maxIndex];
+    }
+    
     console.log(`周期 ${cycleNumber}: UES检测完成`);
     console.log(`   峰值: 帧${UES_peakFrame}, 值=${UES_peakValue.toFixed(3)}`);
     console.log(`   峰值前谷底(UESO): 帧${UES_beforeValleyFrame}, 值=${UES_beforeValleyValue.toFixed(3)}`);
@@ -433,6 +514,8 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
   
   // LVC和LVCoff检测
   const vestibuleData = cycleData.map(row => row.zscore_vestibule).filter(val => val !== null);
+  
+  console.log(`周期 ${cycleNumber}: vestibuleData长度=${vestibuleData.length}, 前5个值=[${vestibuleData.slice(0, 5).map(v => v.toFixed(3)).join(', ')}], 后5个值=[${vestibuleData.slice(-5).map(v => v.toFixed(3)).join(', ')}]`);
   
   if (vestibuleData.length > 0) {
     // 1. 计算拓宽的搜索范围（与HYB/UESO/UESC保持一致）
@@ -464,6 +547,10 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     
     console.log(`周期 ${cycleNumber}: LVC搜索范围拓宽 - 起始帧: ${searchStartFrame}, 结束帧: ${searchEndFrame}`);
     
+    // 计算拓宽搜索范围在当前周期数据中的索引
+    const searchStartInCycle = Math.max(0, searchStartFrame - startFrame);
+    const searchEndInCycle = Math.min(vestibuleData.length - 1, searchEndFrame - startFrame);
+    
     // 2. 计算一阶差分（斜率）来识别谷底和峰值
     const diffData: number[] = [];
     for (let i = 1; i < vestibuleData.length; i++) {
@@ -471,23 +558,45 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     }
     
     // 3. 找到谷底1（喉前庭关闭后的最低点）
-    let valley1Value = vestibuleData[0];
-    let valley1Index = 0;
-    let foundValley1 = false;
+    // 不是找绝对最低值，而是找最低范围内波动的第一帧
+    const cycleStartInData = 0;  // 当前周期在vestibuleData中的起始位置
+    const cycleEndInData = vestibuleData.length - 1;  // 当前周期在vestibuleData中的结束位置
     
-    // 在拓宽的搜索范围内寻找最低值
-    const searchStartInCycle = Math.max(0, searchStartFrame - startFrame);
-    const searchEndInCycle = Math.min(vestibuleData.length - 1, searchEndFrame - startFrame);
+    console.log(`周期 ${cycleNumber}: 谷底1搜索范围 - 数据索引[${cycleStartInData}, ${cycleEndInData}], 数据长度: ${vestibuleData.length}`);
     
-    for (let i = searchStartInCycle; i <= searchEndInCycle; i++) {
-      if (vestibuleData[i] < valley1Value) {
+    // 首先找到绝对最低值
+    let absoluteMinValue = vestibuleData[0];
+    let absoluteMinIndex = 0;
+    for (let i = cycleStartInData; i <= cycleEndInData; i++) {
+      if (vestibuleData[i] < absoluteMinValue) {
+        absoluteMinValue = vestibuleData[i];
+        absoluteMinIndex = i;
+      }
+    }
+    
+    // 定义最低范围的阈值（相对于绝对最低值的偏差）
+    const valleyThreshold = 0.02;  // 允许0.02的偏差范围
+    const valleyRangeMin = absoluteMinValue + valleyThreshold;
+    
+    console.log(`周期 ${cycleNumber}: 绝对最低值=${absoluteMinValue.toFixed(3)} (索引${absoluteMinIndex}), 谷底范围阈值=${valleyThreshold}, 谷底范围上限=${valleyRangeMin.toFixed(3)}`);
+    
+    // 从前往后搜索，找到第一个进入最低范围的值
+    let valley1Value = absoluteMinValue;
+    let valley1Index = absoluteMinIndex;
+    
+    for (let i = cycleStartInData; i <= cycleEndInData; i++) {
+      if (vestibuleData[i] <= valleyRangeMin) {
         valley1Value = vestibuleData[i];
         valley1Index = i;
+        console.log(`周期 ${cycleNumber}: 找到谷底1 - 索引${i}, 值=${valley1Value.toFixed(3)} (进入最低范围)`);
+        break;
       }
     }
     
     LVC_valley1Value = valley1Value;
     LVC_valley1Frame = startFrame + valley1Index;
+    
+    console.log(`周期 ${cycleNumber}: 谷底1搜索结果 - 帧${LVC_valley1Frame}, 值=${LVC_valley1Value.toFixed(3)}, 数据索引${valley1Index}`);
     
     // 4. 从谷底1向前搜索，找到第一个峰值（LVC）
     let peakValue = valley1Value;
@@ -559,62 +668,37 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     LVC = startFrame + peakIndex;
     
     // 5. 从谷底1向后搜索，找到谷底2（LVCoff）
+    // 谷底2应该是最低范围内波动的最后一帧，而不是通过差分搜索
+    console.log(`周期 ${cycleNumber}: 开始搜索谷底2，从谷底1(索引${valley1Index}, 值${valley1Value.toFixed(3)})向后搜索到索引${searchEndInCycle}`);
+    console.log(`周期 ${cycleNumber}: 搜索范围详情 - 谷底1索引:${valley1Index}, 搜索结束索引:${searchEndInCycle}, 数据总长度:${vestibuleData.length}`);
+    
+    // 使用与谷底1相同的谷底范围阈值
+    const valley2Threshold = 0.02;  // 与谷底1使用相同的阈值
+    const valley2RangeMin = absoluteMinValue + valley2Threshold;
+    
+    console.log(`周期 ${cycleNumber}: 谷底2搜索 - 使用谷底范围上限=${valley2RangeMin.toFixed(3)}`);
+    
+    // 从谷底1向后搜索，找到最后一个在最低范围内的值
     let valley2Value = valley1Value;
     let valley2Index = valley1Index;
     let foundValley2 = false;
     
-    // 从谷底1向后搜索，找到下一个谷底，使用二阶差分和更高阈值
-    for (let i = valley1Index + 1; i <= searchEndInCycle; i++) {
-      if (i > 1 && i - 2 < secondDiffData.length) {
-        const currentSecondDiff = secondDiffData[i - 2];
-        const nextSecondDiff = secondDiffData[i - 1];
-        
-        // 谷底特征：二阶差分从负（加速下降）转为正（减速/开始上升）
-        // 使用更高的阈值来避免微小波动
-        if (currentSecondDiff < -0.1 && nextSecondDiff > 0.1) {
-          valley2Value = vestibuleData[i];
-          valley2Index = i;
-          foundValley2 = true;
-          break;
-        }
+    // 从谷底1开始向后搜索，找到最后一个在最低范围内的值
+    for (let i = valley1Index; i <= searchEndInCycle; i++) {
+      if (vestibuleData[i] <= valley2RangeMin) {
+        valley2Value = vestibuleData[i];
+        valley2Index = i;
+        foundValley2 = true;
+      } else {
+        // 一旦超出最低范围，就停止搜索
+        break;
       }
     }
     
-    // 如果没有找到明显的二阶差分转折点，使用一阶差分作为备选方案
-    if (!foundValley2) {
-      for (let i = valley1Index + 1; i <= searchEndInCycle; i++) {
-        if (i > 0 && i - 1 < diffData.length) {
-          const currentSlope = diffData[i - 1];
-          const nextSlope = diffData[i];
-          
-          // 使用更高的阈值来避免微小波动
-          if (currentSlope < -0.15 && nextSlope > 0.15) {
-            valley2Value = vestibuleData[i];
-            valley2Index = i;
-            foundValley2 = true;
-            break;
-          }
-        }
-      }
-    }
-    
-    // 如果仍然没有找到，使用局部最小值作为最后备选方案
-    if (!foundValley2) {
-      let localMin = valley1Value;
-      let localMinIndex = valley1Index;
-      
-      for (let i = valley1Index + 1; i <= searchEndInCycle; i++) {
-        if (vestibuleData[i] < localMin) {
-          localMin = vestibuleData[i];
-          localMinIndex = i;
-        }
-        // 使用更高的阈值来避免微小波动
-        if (i < vestibuleData.length - 1 && (vestibuleData[i+1] - vestibuleData[i]) > 0.15) {
-          break;
-        }
-      }
-      valley2Value = localMin;
-      valley2Index = localMinIndex;
+    if (foundValley2) {
+      console.log(`周期 ${cycleNumber}: 找到谷底2 - 索引${valley2Index}, 值=${valley2Value.toFixed(3)} (最低范围内最后一帧)`);
+    } else {
+      console.log(`周期 ${cycleNumber}: 未找到谷底2，使用谷底1作为谷底2`);
     }
     
     LVC_valley2Value = valley2Value;
@@ -643,12 +727,23 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     maxOverlapRatio: maxOverlapRatio,
     aspirationThreshold: 0.2,
     overlapRatioDetails: overlapRatioDetails,
+    // 会厌谿/梨状窦残留参数
+    residueRisk: residueRisk,
+    residueRatio: residueRatio,
+    residueThreshold: 0.2,
     // HYB参数
     HYB: HYB,
     HYB_peakFrame: HYB_peakFrame,
     HYB_valleyFrame: HYB_valleyFrame,
     HYB_peakValue: HYB_peakValue,
     HYB_valleyValue: HYB_valleyValue,
+    HYB_normalizedValue: HYB_normalizedValue,
+    MHY_normalized_hyoid_relative_x: MHY_normalized_hyoid_relative_x,
+    MHY_normalized_hyoid_relative_y: MHY_normalized_hyoid_relative_y,
+    MHY_normalized_hyoid_c4_distance: MHY_normalized_hyoid_c4_distance,
+    HYB_normalized_hyoid_relative_x: HYB_normalized_hyoid_relative_x,
+    HYB_normalized_hyoid_relative_y: HYB_normalized_hyoid_relative_y,
+    HYB_normalized_hyoid_c4_distance: HYB_normalized_hyoid_c4_distance,
     // UESO和UESC参数
     UESO: UESO,
     UESC: UESC,
@@ -658,6 +753,9 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     UES_afterValleyFrame: UES_afterValleyFrame,
     UES_beforeValleyValue: UES_beforeValleyValue,
     UES_afterValleyValue: UES_afterValleyValue,
+    UESO_normalizedValue: UESO_normalizedValue,
+    UESmax_normalizedValue: UESmax_normalizedValue,
+    UESC_normalizedValue: UESC_normalizedValue,
     // LVC和LVCoff参数
     LVC: LVC,
     LVCoff: LVCoff,
@@ -876,7 +974,9 @@ const processAdvancedData = (originalAreas: any[], referenceC2C4: number) => {
     bolus: originalAreas.map(a => a.bolus || 0), // 添加bolus面积
     hyoid_c4_distance: originalAreas.map(a => a.hyoid_c4_distance),
     ues_length: originalAreas.map(a => a.ues_length),
-    c2c4_length: originalAreas.map(a => a.c2c4_length)
+    c2c4_length: originalAreas.map(a => a.c2c4_length),
+    hyoid_relative_x: originalAreas.map(a => a.hyoid_relative_x),
+    hyoid_relative_y: originalAreas.map(a => a.hyoid_relative_y)
   };
   
   // 应用Savitzky-Golay平滑（2阶）
@@ -886,9 +986,72 @@ const processAdvancedData = (originalAreas: any[], referenceC2C4: number) => {
     pharynx: savitzkyGolayFilter(dataToProcess.pharynx, 5, 2),
     vestibule: savitzkyGolayFilter(dataToProcess.vestibule, 5, 2),
     bolus: savitzkyGolayFilter(dataToProcess.bolus, 5, 2),
-    hyoid_c4_distance: savitzkyGolayFilter(dataToProcess.hyoid_c4_distance.filter(d => d !== null), 5, 2),
-    ues_length: savitzkyGolayFilter(dataToProcess.ues_length.filter(d => d !== null), 5, 2),
-    c2c4_length: savitzkyGolayFilter(dataToProcess.c2c4_length.filter(d => d !== null && d > 0), 5, 2)
+    // 修复：对距离参数进行更安全的平滑处理
+    hyoid_c4_distance: dataToProcess.hyoid_c4_distance.map((val, idx) => {
+      if (val === null) return null;
+      // 对非null值进行平滑处理
+      const validValues = [];
+      for (let i = Math.max(0, idx - 2); i <= Math.min(dataToProcess.hyoid_c4_distance.length - 1, idx + 2); i++) {
+        if (dataToProcess.hyoid_c4_distance[i] !== null) {
+          validValues.push(dataToProcess.hyoid_c4_distance[i]);
+        }
+      }
+      if (validValues.length === 0) return null;
+      // 简单的移动平均平滑
+      return validValues.reduce((sum, v) => sum + v, 0) / validValues.length;
+    }),
+    ues_length: dataToProcess.ues_length.map((val, idx) => {
+      if (val === null) return null;
+      // 对非null值进行平滑处理
+      const validValues = [];
+      for (let i = Math.max(0, idx - 2); i <= Math.min(dataToProcess.ues_length.length - 1, idx + 2); i++) {
+        if (dataToProcess.ues_length[i] !== null) {
+          validValues.push(dataToProcess.ues_length[i]);
+        }
+      }
+      if (validValues.length === 0) return null;
+      // 简单的移动平均平滑
+      return validValues.reduce((sum, v) => sum + v, 0) / validValues.length;
+    }),
+    c2c4_length: dataToProcess.c2c4_length.map((val, idx) => {
+      if (val === null || val <= 0) return null;
+      // 对非null值进行平滑处理
+      const validValues = [];
+      for (let i = Math.max(0, idx - 2); i <= Math.min(dataToProcess.c2c4_length.length - 1, idx + 2); i++) {
+        if (dataToProcess.c2c4_length[i] !== null && dataToProcess.c2c4_length[i] > 0) {
+          validValues.push(dataToProcess.c2c4_length[i]);
+        }
+      }
+      if (validValues.length === 0) return null;
+      // 简单的移动平均平滑
+      return validValues.reduce((sum, v) => sum + v, 0) / validValues.length;
+    }),
+    hyoid_relative_x: dataToProcess.hyoid_relative_x.map((val, idx) => {
+      if (val === null) return null;
+      // 对非null值进行平滑处理
+      const validValues = [];
+      for (let i = Math.max(0, idx - 2); i <= Math.min(dataToProcess.hyoid_relative_x.length - 1, idx + 2); i++) {
+        if (dataToProcess.hyoid_relative_x[i] !== null) {
+          validValues.push(dataToProcess.hyoid_relative_x[i]);
+        }
+      }
+      if (validValues.length === 0) return null;
+      // 简单的移动平均平滑
+      return validValues.reduce((sum, v) => sum + v, 0) / validValues.length;
+    }),
+    hyoid_relative_y: dataToProcess.hyoid_relative_y.map((val, idx) => {
+      if (val === null) return null;
+      // 对非null值进行平滑处理
+      const validValues = [];
+      for (let i = Math.max(0, idx - 2); i <= Math.min(dataToProcess.hyoid_relative_y.length - 1, idx + 2); i++) {
+        if (dataToProcess.hyoid_relative_y[i] !== null) {
+          validValues.push(dataToProcess.hyoid_relative_y[i]);
+        }
+      }
+      if (validValues.length === 0) return null;
+      // 简单的移动平均平滑
+      return validValues.reduce((sum, v) => sum + v, 0) / validValues.length;
+    })
   };
   
   // 归一化处理
@@ -909,6 +1072,8 @@ const processAdvancedData = (originalAreas: any[], referenceC2C4: number) => {
         normalized_bolus: null,
         normalized_hyoid_c4_distance: null,
         normalized_ues_length: null,
+        normalized_hyoid_relative_x: null,
+        normalized_hyoid_relative_y: null,
         zscore_bolus_pharynx_overlap: null,
         zscore_bolus_vestibule_overlap: null,
         zscore_pharynx: null,
@@ -942,6 +1107,13 @@ const processAdvancedData = (originalAreas: any[], referenceC2C4: number) => {
       normalized_ues_length: smoothedData.ues_length[index] !== null 
         ? smoothedData.ues_length[index] * scaleFactorSquared 
         : null,
+      // 相对坐标归一化（线性关系）
+      normalized_hyoid_relative_x: smoothedData.hyoid_relative_x[index] !== null 
+        ? smoothedData.hyoid_relative_x[index] * scaleFactor 
+        : null,
+      normalized_hyoid_relative_y: smoothedData.hyoid_relative_y[index] !== null 
+        ? smoothedData.hyoid_relative_y[index] * scaleFactor 
+        : null,
       // Z-score标准化（将在下面计算）
       zscore_bolus_pharynx_overlap: null,
       zscore_bolus_vestibule_overlap: null,
@@ -968,7 +1140,7 @@ const processAdvancedData = (originalAreas: any[], referenceC2C4: number) => {
     // 收集该组参数的所有有效值
     const groupValues: number[] = [];
     paramNames.forEach(paramName => {
-      const values = data.map((row: any) => row[paramName]).filter((v: any) => v !== null);
+      const values = data.map((row: any) => row[paramName]).filter((v: any) => v !== null && !isNaN(v));
       if (values.length > 0) {
         groupValues.push(...values);
       }
@@ -981,7 +1153,16 @@ const processAdvancedData = (originalAreas: any[], referenceC2C4: number) => {
     const variance = groupValues.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / groupValues.length;
     const stdDev = Math.sqrt(variance);
     
-    return { mean, stdDev: stdDev > 0 ? stdDev : 1 };
+    // 修复：确保标准差不为0，避免除零错误
+    const finalStdDev = stdDev > 0 ? stdDev : 1;
+    
+    console.log(`Z-score计算 - 参数组: ${paramNames.join(', ')}`);
+    console.log(`  有效值数量: ${groupValues.length}`);
+    console.log(`  均值: ${mean.toFixed(6)}`);
+    console.log(`  标准差: ${stdDev.toFixed(6)} (使用: ${finalStdDev.toFixed(6)})`);
+    console.log(`  数值范围: [${Math.min(...(groupValues as number[])).toFixed(6)}, ${Math.max(...(groupValues as number[])).toFixed(6)}]`);
+    
+    return { mean, stdDev: finalStdDev };
   };
   
   // 计算面积参数组的Z-score
@@ -995,21 +1176,41 @@ const processAdvancedData = (originalAreas: any[], referenceC2C4: number) => {
     // 面积参数使用面积组的统计量
     areaParameterNames.forEach(paramName => {
       const normalizedValue = row[paramName];
-      if (normalizedValue !== null) {
+      if (normalizedValue !== null && !isNaN(normalizedValue)) {
         const zscoreParamName = paramName.replace('normalized_', 'zscore_');
-        row[zscoreParamName] = (normalizedValue - areaStats.mean) / areaStats.stdDev;
+        const zscore = (normalizedValue - areaStats.mean) / areaStats.stdDev;
+        row[zscoreParamName] = isFinite(zscore) ? zscore : null;
       }
     });
     
     // 长度/距离参数使用长度/距离组的统计量
     distanceParameterNames.forEach(paramName => {
       const normalizedValue = row[paramName];
-      if (normalizedValue !== null) {
+      if (normalizedValue !== null && !isNaN(normalizedValue)) {
         const zscoreParamName = paramName.replace('normalized_', 'zscore_');
-        row[zscoreParamName] = (normalizedValue - distanceStats.mean) / distanceStats.stdDev;
+        const zscore = (normalizedValue - distanceStats.mean) / distanceStats.stdDev;
+        row[zscoreParamName] = isFinite(zscore) ? zscore : null;
       }
     });
   });
+  
+  // 验证Z-score计算结果
+  const zscoreValidation = {
+    hyoid_c4_distance: {
+      total: normalizedData.length,
+      valid: normalizedData.filter(row => row.zscore_hyoid_c4_distance !== null).length,
+      null: normalizedData.filter(row => row.zscore_hyoid_c4_distance === null).length,
+      nan: normalizedData.filter(row => row.zscore_hyoid_c4_distance !== null && isNaN(row.zscore_hyoid_c4_distance)).length
+    },
+    ues_length: {
+      total: normalizedData.length,
+      valid: normalizedData.filter(row => row.zscore_ues_length !== null).length,
+      null: normalizedData.filter(row => row.zscore_ues_length === null).length,
+      nan: normalizedData.filter(row => row.zscore_ues_length !== null && isNaN(row.zscore_ues_length)).length
+    }
+  };
+  
+  console.log('Z-score验证结果:', zscoreValidation);
   
   return {
     reference: referenceC2C4,
@@ -1023,7 +1224,8 @@ const processAdvancedData = (originalAreas: any[], referenceC2C4: number) => {
       mean: distanceStats.mean,
       stdDev: distanceStats.stdDev,
       parameterCount: distanceParameterNames.length
-    }
+    },
+    zscoreValidation
   };
 };
 
@@ -1319,13 +1521,32 @@ function App() {
     
     if (!validData.length) return undefined;
 
+    // 采样逻辑：只保留约25个点
+    const targetPoints = 25;
+    const totalFrames = validData.length;
+    let sampledData;
+    
+    if (totalFrames <= targetPoints) {
+      // 如果总帧数不超过25帧，使用所有数据
+      sampledData = validData;
+    } else {
+      // 计算采样间隔
+      const interval = Math.ceil(totalFrames / targetPoints);
+      sampledData = validData.filter((_, index) => index % interval === 0);
+      
+      // 确保包含最后一帧
+      if (sampledData[sampledData.length - 1].frame !== validData[validData.length - 1].frame) {
+        sampledData.push(validData[validData.length - 1]);
+      }
+    }
+
     // 分离轨迹点和连接线
-    const scatterData = validData.map(item => [item.x, item.y]);
-    const lineData = validData.map(item => [item.x, item.y]);
+    const scatterData = sampledData.map(item => [item.x, item.y]);
+    const lineData = sampledData.map(item => [item.x, item.y]);
 
     // 计算坐标范围，添加边距
-    const xValues = validData.map(item => item.x!);
-    const yValues = validData.map(item => item.y!);
+    const xValues = sampledData.map(item => item.x!);
+    const yValues = sampledData.map(item => item.y!);
     const xRange = Math.max(...xValues) - Math.min(...xValues);
     const yRange = Math.max(...yValues) - Math.min(...yValues);
     const margin = Math.max(xRange, yRange) * 0.1; // 10%边距
@@ -1343,7 +1564,7 @@ function App() {
         formatter: function(params: any) {
           if (params.componentType === 'series') {
             const dataIndex = params.dataIndex;
-            const item = validData[dataIndex];
+            const item = sampledData[dataIndex];
             return `Frame: ${item.frame}<br/>X: ${item.x?.toFixed(2)}<br/>Y: ${item.y?.toFixed(2)}`;
           }
           return '';
@@ -1391,16 +1612,16 @@ function App() {
           data: scatterData, 
           symbolSize: function(value: any, params: any) {
             // 根据帧数调整点的大小，让轨迹更清晰
-            const frameIdx = validData[params.dataIndex].frame;
+            const frameIdx = sampledData[params.dataIndex].frame;
             if (frameIdx === 0) return 12; // 起始点更大
-            if (frameIdx === validData.length - 1) return 12; // 结束点更大
+            if (frameIdx === sampledData[sampledData.length - 1].frame) return 12; // 结束点更大
             return 6; // 中间点较小
           },
           itemStyle: { 
             color: function(params: any) {
               // 根据帧数渐变颜色，显示运动方向
-              const frameIdx = validData[params.dataIndex].frame;
-              const progress = frameIdx / (validData.length - 1);
+              const frameIdx = sampledData[params.dataIndex].frame;
+              const progress = frameIdx / (sampledData[sampledData.length - 1].frame);
               return `hsl(${200 + progress * 160}, 70%, 50%)`; // 从蓝色渐变到红色
             }
           },
@@ -2686,6 +2907,186 @@ function App() {
     };
   }, [advancedData]);
 
+  // 创建高级分析的Hyoid Trajectory图表
+  const advancedHyoidTrajectoryChartOption = useMemo(() => {
+    if (!advancedData?.processedData || !advancedData?.swallowingAnalysis?.cycles) return undefined;
+    
+    const processedData = advancedData.processedData;
+    const cycles = advancedData.swallowingAnalysis.cycles;
+    
+    // 为每次吞咽创建轨迹数据
+    const seriesData = cycles.map((cycle: any, cycleIndex: number) => {
+      const cycleData = [];
+      const scatterData = [];
+      
+      // 获取该吞咽周期的数据（从BPM到SWALLOW REST）
+      for (let frame = cycle.startFrame; frame <= cycle.endFrame; frame++) {
+        if (frame < processedData.length) {
+          const data = processedData[frame];
+          if (data.normalized_hyoid_relative_x !== null && data.normalized_hyoid_relative_y !== null) {
+            cycleData.push([data.normalized_hyoid_relative_x, data.normalized_hyoid_relative_y]);
+            
+            // 标记开始和结束点
+            if (frame === cycle.startFrame || frame === cycle.endFrame) {
+              scatterData.push([data.normalized_hyoid_relative_x, data.normalized_hyoid_relative_y]);
+            }
+          }
+        }
+      }
+      
+      const color = `hsl(${(cycleIndex * 60) % 360}, 70%, 50%)`;
+      
+      return [
+        // 轨迹线
+        {
+          name: `第${cycle.cycleNumber}次吞咽`,
+          data: cycleData,
+          type: 'line',
+          smooth: true,
+          lineStyle: { 
+            width: 3,
+            color: color
+          },
+          itemStyle: { 
+            color: color
+          },
+          showSymbol: false,
+          emphasis: {
+            lineStyle: { width: 5 }
+          }
+        },
+        // 开始和结束点
+        {
+          name: '', // 不显示图例
+          data: scatterData,
+          type: 'scatter',
+          symbolSize: function(value: any, params: any) {
+            return 8; // 关键点大小
+          },
+          itemStyle: { 
+            color: color,
+            borderColor: '#fff',
+            borderWidth: 2
+          },
+          emphasis: {
+            itemStyle: {
+              borderColor: '#fff',
+              borderWidth: 3,
+              shadowBlur: 10,
+              shadowColor: 'rgba(0,0,0,0.3)'
+            }
+          },
+          z: 10, // 确保点在线上方
+          legendHoverLink: false // 不响应图例悬停
+        }
+      ];
+    }).flat();
+    
+    // 计算坐标范围
+    const allX = processedData
+      .map((d: any) => d.normalized_hyoid_relative_x)
+      .filter((x: any) => x !== null);
+    const allY = processedData
+      .map((d: any) => d.normalized_hyoid_relative_y)
+      .filter((y: any) => y !== null);
+    
+    if (allX.length === 0 || allY.length === 0) return undefined;
+    
+    const xRange = Math.max(...allX) - Math.min(...allX);
+    const yRange = Math.max(...allY) - Math.min(...allY);
+    const margin = Math.max(xRange, yRange) * 0.1;
+    
+    return {
+      title: { 
+        text: 'Advanced Analysis: Normalized Hyoid Trajectory (C2C4 Normalized)',
+        left: 'center',
+        top: 10,
+        textStyle: { fontSize: 16, fontWeight: 'bold' },
+        itemGap: 20
+      },
+      tooltip: {
+        trigger: 'item',
+        formatter: function(params: any) {
+          if (params.componentType === 'series') {
+            return `${params.seriesName}<br/>X: ${params.data[0]?.toFixed(2)}<br/>Y: ${params.data[1]?.toFixed(2)}`;
+          }
+          return '';
+        }
+      },
+      legend: { 
+        data: seriesData.filter((s: any) => s.name && s.name !== '').map((s: any) => s.name),
+        top: 60,
+        itemGap: 20,
+        textStyle: { fontSize: 12 }
+      },
+      grid: { 
+        left: 60, 
+        right: 20, 
+        top: 120, 
+        bottom: 50,
+        containLabel: true
+      },
+      xAxis: { 
+        type: 'value', 
+        name: 'Normalized Relative X (perpendicular to C2C4)',
+        nameLocation: 'middle',
+        nameGap: 30,
+        min: Math.min(...allX) - margin,
+        max: Math.max(...allX) + margin,
+        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#e0e0e0' } },
+        axisLine: { lineStyle: { color: '#333' } },
+        axisTick: { show: true },
+        axisLabel: {
+          formatter: function(value: number) {
+            return value.toFixed(1);
+          }
+        }
+      },
+      yAxis: { 
+        type: 'value', 
+        name: 'Normalized Relative Y (along C2C4)',
+        nameLocation: 'middle',
+        nameGap: 40,
+        min: Math.min(...allY) - margin,
+        max: Math.max(...allY) + margin,
+        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#e0e0e0' } },
+        axisLine: { lineStyle: { color: '#333' } },
+        axisTick: { show: true },
+        axisLabel: {
+          formatter: function(value: number) {
+            return value.toFixed(1);
+          }
+        }
+      },
+      series: seriesData,
+      // 添加数据缩放功能
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'filter'
+        },
+        {
+          type: 'inside',
+          yAxisIndex: 0,
+          filterMode: 'filter'
+        }
+      ],
+      // 添加工具箱
+      toolbox: {
+        feature: {
+          dataZoom: { title: 'Zoom' },
+          restore: { title: 'Restore' },
+          saveAsImage: { title: 'Save' }
+        },
+        right: 20,
+        top: 20,
+        itemSize: 16,
+        itemGap: 8
+      }
+    };
+  }, [advancedData]);
+
 
 
   return (
@@ -3023,7 +3424,7 @@ function App() {
                         <div style={{ 
                           width: '18px', 
                           height: '18px', 
-                          backgroundColor: '#ffff00', 
+                          backgroundColor: '#00ffff', 
                           borderRadius: '2px'
                         }}></div>
                         <span style={{ fontSize: '13px' }}>pharynx (青色)</span>
@@ -3041,7 +3442,7 @@ function App() {
                         <div style={{ 
                           width: '18px', 
                           height: '18px', 
-                          backgroundColor: '#ff0080', 
+                          backgroundColor: '#ff1493', 
                           borderRadius: '2px'
                         }}></div>
                         <span style={{ fontSize: '13px' }}>bolus (粉色)</span>
@@ -3316,6 +3717,17 @@ function App() {
                 )}
               </div>
 
+              {/* 高级分析Hyoid Trajectory图表 */}
+              <div style={{ marginTop: 24 }}>
+                {advancedHyoidTrajectoryChartOption && (
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    <div style={{ width: '50%', minWidth: '600px' }}>
+                      <ReactECharts option={advancedHyoidTrajectoryChartOption} style={{ height: 500 }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* 调试信息面板 */}
               <div style={{ 
                 marginTop: 24, 
@@ -3479,19 +3891,14 @@ function App() {
                           <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>起始帧 (BPM)</th>
                           <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>峰值帧</th>
                           <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>结束帧 (SWALLOW REST)</th>
-                          <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>持续时间 (帧)</th>
-                          <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>起始时间 (秒)</th>
-                          <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>结束时间 (秒)</th>
-                          <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>持续时间 (秒)</th>
-                          <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>峰值Z-Score</th>
-                          <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>咽腔收缩率PCR</th>
-                          <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>误吸误咽风险<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(Normalized数据)</span></th>
                           <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>HYB<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(Hyoid Burst Onset)</span></th>
-                <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>UESmax<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(UES Peak)</span></th>
+                          <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>MHY<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(Maximal Hyoid Excursion)</span></th>
                 <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>UESO<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(UES Opening)</span></th>
+                <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>UESmax<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(UES Peak)</span></th>
                 <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>UESC<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(UES Closing)</span></th>
+                <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>LVCst<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(LVCstart)</span></th>
                 <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>LVC<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(Laryngeal Vestibule Closure)</span></th>
-                <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>LVCoff<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(Laryngeal Vestibule Reopening)</span></th>
+                <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>LVCoff<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(LVC Reopening)</span></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -3510,59 +3917,6 @@ function App() {
                               {cycle.endFrame}
                             </td>
                             <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
-                              {cycle.duration}
-                            </td>
-                            <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
-                              {cycle.startTime.toFixed(2)}
-                            </td>
-                            <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
-                              {cycle.endTime.toFixed(2)}
-                            </td>
-                            <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
-                              {cycle.durationTime.toFixed(2)}
-                            </td>
-                            <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
-                              {cycle.peakValue.toFixed(3)}
-                            </td>
-                            <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
-                              {cycle.PCR ? (
-                                <div>
-                                  <div style={{ fontWeight: 'bold' }}>{cycle.PCR.toFixed(3)}</div>
-                                  <div style={{ fontSize: '11px', color: '#666' }}>
-                                    5%: {cycle.PCR_p5?.toFixed(3)} / 95%: {cycle.PCR_p95?.toFixed(3)}
-                                  </div>
-                                  {cycle.PCR_hasNegativeValues && (
-                                    <div style={{ fontSize: '10px', color: '#ff6b6b', fontStyle: 'italic' }}>
-                                      已处理负值
-                                    </div>
-                                  )}
-                                </div>
-                              ) : (
-                                <span style={{ color: '#999', fontStyle: 'italic' }}>N/A</span>
-                              )}
-                            </td>
-                            <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
-                              {cycle.aspirationRisk !== null ? (
-                                <div>
-                                  <div style={{ 
-                                    fontWeight: 'bold', 
-                                    color: cycle.aspirationRisk ? '#dc3545' : '#28a745',
-                                    fontSize: '14px'
-                                  }}>
-                                    {cycle.aspirationRisk ? '⚠️ 存在风险' : '✅ 无风险'}
-                                  </div>
-                                  <div style={{ fontSize: '11px', color: '#666' }}>
-                                    最大比值: {cycle.maxOverlapRatio?.toFixed(3)}
-                                  </div>
-                                  <div style={{ fontSize: '10px', color: '#999' }}>
-                                    阈值: {cycle.aspirationThreshold} (基于Normalized数据)
-                                  </div>
-                                </div>
-                              ) : (
-                                <span style={{ color: '#999', fontStyle: 'italic' }}>N/A</span>
-                              )}
-                            </td>
-                            <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
                               {cycle.HYB !== null ? (
                                 <div>
                                   <div style={{ fontWeight: 'bold', color: '#007bff' }}>
@@ -3577,13 +3931,13 @@ function App() {
                               )}
                             </td>
                             <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
-                              {cycle.UES_peakFrame !== null ? (
+                              {cycle.HYB_peakFrame !== null ? (
                                 <div>
-                                  <div style={{ fontWeight: 'bold', color: '#6f42c1' }}>
-                                    {cycle.UES_peakFrame}
+                                  <div style={{ fontWeight: 'bold', color: '#17a2b8' }}>
+                                    {cycle.HYB_peakFrame}
                                   </div>
                                   <div style={{ fontSize: '11px', color: '#666' }}>
-                                    峰值Z-Score: {cycle.UES_peakValue?.toFixed(3)}
+                                    峰值Z-Score: {cycle.HYB_peakValue?.toFixed(3)}
                                   </div>
                                 </div>
                               ) : (
@@ -3597,7 +3951,23 @@ function App() {
                                     {cycle.UESO}
                                   </div>
                                   <div style={{ fontSize: '11px', color: '#666' }}>
-                                    峰值: {cycle.UES_peakFrame} | 前谷底: {cycle.UES_beforeValleyFrame}
+                                    峰值: {cycle.UES_peakFrame} | 前谷底: {cycle.UES_beforeValleyFrame}<br/>
+                                    Normalized: {cycle.UESO_normalizedValue?.toFixed(3)}
+                                  </div>
+                                </div>
+                              ) : (
+                                <span style={{ color: '#999', fontStyle: 'italic' }}>N/A</span>
+                              )}
+                            </td>
+                            <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
+                              {cycle.UES_peakFrame !== null ? (
+                                <div>
+                                  <div style={{ fontWeight: 'bold', color: '#6f42c1' }}>
+                                    {cycle.UES_peakFrame}
+                                  </div>
+                                  <div style={{ fontSize: '11px', color: '#666' }}>
+                                    峰值Z-Score: {cycle.UES_peakValue?.toFixed(3)}<br/>
+                                    Normalized: {cycle.UESmax_normalizedValue?.toFixed(3)}
                                   </div>
                                 </div>
                               ) : (
@@ -3611,7 +3981,8 @@ function App() {
                                     {cycle.UESC}
                                   </div>
                                   <div style={{ fontSize: '11px', color: '#666' }}>
-                                    峰值: {cycle.UES_peakFrame} | 后谷底: {cycle.UES_afterValleyFrame}
+                                    峰值: {cycle.UES_peakFrame} | 后谷底: {cycle.UES_afterValleyFrame}<br/>
+                                    Normalized: {cycle.UESC_normalizedValue?.toFixed(3)}
                                   </div>
                                 </div>
                               ) : (
@@ -3626,6 +3997,20 @@ function App() {
                                   </div>
                                   <div style={{ fontSize: '11px', color: '#666' }}>
                                     峰值: {cycle.LVC_peakFrame} | 谷底1: {cycle.LVC_valley1Frame}
+                                  </div>
+                                </div>
+                              ) : (
+                                <span style={{ color: '#999', fontStyle: 'italic' }}>N/A</span>
+                              )}
+                            </td>
+                            <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
+                              {cycle.LVC_valley1Frame !== null ? (
+                                <div>
+                                  <div style={{ fontWeight: 'bold', color: '#17a2b8' }}>
+                                    {cycle.LVC_valley1Frame}
+                                  </div>
+                                  <div style={{ fontSize: '11px', color: '#666' }}>
+                                    谷底1值: {cycle.LVC_valley1Value?.toFixed(3)}
                                   </div>
                                 </div>
                               ) : (
@@ -3662,6 +4047,304 @@ function App() {
                     <strong>参数说明：</strong> BPM = Bolus Passing Mandible（吞咽起始），SWALLOW REST = 吞咽结束后的稳定期中间值
                   </div>
                   
+                  {/* 特殊帧提取表格下载按钮 */}
+                  <div style={{ 
+                    marginTop: '15px',
+                    textAlign: 'center'
+                  }}>
+                    <button
+                      onClick={() => {
+                        if (!advancedData?.swallowingAnalysis?.cycles) return;
+                        
+                        const cycles = advancedData.swallowingAnalysis.cycles;
+                        const headers = [
+                          '吞咽次数',
+                          '起始帧(BPM)',
+                          '峰值帧',
+                          '结束帧(SWALLOW_REST)',
+                          'HYB',
+                          'MHY',
+                          'UESO',
+                          'UESmax',
+                          'UESC',
+                          'LVCst',
+                          'LVC',
+                          'LVCoff'
+                        ];
+                        
+                        const csvContent = [
+                          headers.join(','),
+                          ...cycles.map((cycle: any) => [
+                            `第${cycle.cycleNumber}次吞咽`,
+                            cycle.startFrame || '',
+                            cycle.peakFrame || '',
+                            cycle.endFrame || '',
+                            cycle.HYB || 'N/A',
+                            cycle.HYB_peakFrame || 'N/A',
+                            cycle.UESO || 'N/A',
+                            cycle.UESmax || 'N/A',
+                            cycle.UESC || 'N/A',
+                            cycle.LVC || 'N/A',
+                            cycle.LVC_valley1Frame || 'N/A',
+                            cycle.LVCoff || 'N/A'
+                          ].join(','))
+                        ].join('\n');
+                        
+                        const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+                        const link = document.createElement('a');
+                        const url = URL.createObjectURL(blob);
+                        link.setAttribute('href', url);
+                        link.setAttribute('download', 'special_frames_analysis.csv');
+                        link.style.visibility = 'hidden';
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                      }}
+                      style={{
+                        padding: '10px 20px',
+                        backgroundColor: '#28a745',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        fontWeight: 'bold'
+                      }}
+                    >
+                      📥 下载特殊帧提取表格 (CSV)
+                    </button>
+                  </div>
+                  
+                  {/* 表格3：运动学及其他参数分析 */}
+                  <div style={{ 
+                    marginTop: 24, 
+                    padding: '20px', 
+                    border: '2px solid #6f42c1', 
+                    borderRadius: '12px',
+                    backgroundColor: '#f8f6ff',
+                    width: '100%'
+                  }}>
+                    <h3 style={{ 
+                      margin: '0 0 20px 0', 
+                      color: '#6f42c1',
+                      fontSize: '20px',
+                      fontWeight: 'bold',
+                      textAlign: 'center'
+                    }}>
+                      运动学及其他参数分析
+                    </h3>
+                    
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ 
+                        width: '100%', 
+                        borderCollapse: 'collapse',
+                        fontSize: '14px'
+                      }}>
+                        <thead>
+                          <tr style={{ backgroundColor: '#6f42c1', color: 'white' }}>
+                            <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>吞咽次数</th>
+                            <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>咽腔收缩率PCR</th>
+                            <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>误吸误咽风险<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(Normalized数据)</span></th>
+                            <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>会厌谿/梨状窦残留<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(Normalized数据)</span></th>
+                            <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>舌骨最大位移（x）<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(MHY_x - HYB_x)</span></th>
+                            <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>舌骨最大位移（y）<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(MHY_y - HYB_y)</span></th>
+                            <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>舌骨最大位移（xy）<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(MHY_c4 - HYB_c4)</span></th>
+                            <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>UES开放幅度<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(UES Opening Range, UOR)</span></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {advancedData.swallowingAnalysis.cycles.map((cycle: any, index: number) => (
+                            <tr key={index} style={{ backgroundColor: index % 2 === 0 ? '#f9f9f9' : 'white' }}>
+                              <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center', fontWeight: 'bold' }}>
+                                第{cycle.cycleNumber}次吞咽
+                              </td>
+                              <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
+                                {cycle.PCR ? (
+                                  <div>
+                                    <div style={{ fontWeight: 'bold' }}>{cycle.PCR.toFixed(3)}</div>
+                                    <div style={{ fontSize: '11px', color: '#666' }}>
+                                      5%: {cycle.PCR_p5?.toFixed(3)} / 95%: {cycle.PCR_p95?.toFixed(3)}
+                                    </div>
+                                    {cycle.PCR_hasNegativeValues && (
+                                      <div style={{ fontSize: '10px', color: '#ff6b6b', fontStyle: 'italic' }}>
+                                        已处理负值
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span style={{ color: '#999', fontStyle: 'italic' }}>N/A</span>
+                                )}
+                              </td>
+                              <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
+                                {cycle.aspirationRisk !== null ? (
+                                  <div>
+                                    <div style={{ 
+                                      fontWeight: 'bold', 
+                                      color: cycle.aspirationRisk ? '#dc3545' : '#28a745',
+                                      fontSize: '14px'
+                                    }}>
+                                      {cycle.aspirationRisk ? '⚠️ 存在风险' : '✅ 无风险'}
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: '#666' }}>
+                                      最大比值: {cycle.maxOverlapRatio?.toFixed(3)}
+                                    </div>
+                                    <div style={{ fontSize: '10px', color: '#999' }}>
+                                      阈值: {cycle.aspirationThreshold} (基于Normalized数据)
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span style={{ color: '#999', fontStyle: 'italic' }}>N/A</span>
+                                )}
+                              </td>
+                              <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
+                                {cycle.residueRisk !== null ? (
+                                  <div>
+                                    <div style={{ 
+                                      fontWeight: 'bold', 
+                                      color: cycle.residueRisk ? '#dc3545' : '#28a745',
+                                      fontSize: '14px'
+                                    }}>
+                                      {cycle.residueRisk ? '⚠️ 存在残留' : '✅ 无残留'}
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: '#666' }}>
+                                      残留比值: {cycle.residueRatio?.toFixed(3)}
+                                    </div>
+                                    <div style={{ fontSize: '10px', color: '#999' }}>
+                                      阈值: {cycle.residueThreshold} (基于Normalized数据)
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span style={{ color: '#999', fontStyle: 'italic' }}>N/A</span>
+                                )}
+                              </td>
+                              <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
+                                {cycle.MHY_normalized_hyoid_relative_x !== null && cycle.HYB_normalized_hyoid_relative_x !== null ? (
+                                  <div>
+                                    <div style={{ fontWeight: 'bold', color: '#007bff' }}>
+                                      {(cycle.MHY_normalized_hyoid_relative_x - cycle.HYB_normalized_hyoid_relative_x).toFixed(3)}
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: '#666' }}>
+                                      MHY: {cycle.MHY_normalized_hyoid_relative_x.toFixed(3)} - HYB: {cycle.HYB_normalized_hyoid_relative_x.toFixed(3)}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span style={{ color: '#999', fontStyle: 'italic' }}>N/A</span>
+                                )}
+                              </td>
+                              <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
+                                {cycle.MHY_normalized_hyoid_relative_y !== null && cycle.HYB_normalized_hyoid_relative_y !== null ? (
+                                  <div>
+                                    <div style={{ fontWeight: 'bold', color: '#007bff' }}>
+                                      {(cycle.MHY_normalized_hyoid_relative_y - cycle.HYB_normalized_hyoid_relative_y).toFixed(3)}
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: '#666' }}>
+                                      MHY: {cycle.MHY_normalized_hyoid_relative_y.toFixed(3)} - HYB: {cycle.HYB_normalized_hyoid_relative_y.toFixed(3)}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span style={{ color: '#999', fontStyle: 'italic' }}>N/A</span>
+                                )}
+                              </td>
+                              <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
+                                {cycle.MHY_normalized_hyoid_c4_distance !== null && cycle.HYB_normalized_hyoid_c4_distance !== null ? (
+                                  <div>
+                                    <div style={{ fontWeight: 'bold', color: '#007bff' }}>
+                                      {(cycle.MHY_normalized_hyoid_c4_distance - cycle.HYB_normalized_hyoid_c4_distance).toFixed(3)}
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: '#666' }}>
+                                      MHY: {cycle.MHY_normalized_hyoid_c4_distance.toFixed(3)} - HYB: {cycle.HYB_normalized_hyoid_c4_distance.toFixed(3)}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span style={{ color: '#999', fontStyle: 'italic' }}>N/A</span>
+                                )}
+                              </td>
+                              <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
+                                {cycle.UESmax_normalizedValue !== null ? (
+                                  <div>
+                                    <div style={{ fontWeight: 'bold', color: '#6f42c1' }}>
+                                      {cycle.UESmax_normalizedValue.toFixed(3)}
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: '#666' }}>
+                                      帧: {cycle.UES_peakFrame}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span style={{ color: '#999', fontStyle: 'italic' }}>N/A</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    
+                    {/* 表格3 CSV下载按钮 */}
+                    <div style={{ 
+                      marginTop: '20px',
+                      textAlign: 'center'
+                    }}>
+                      <button
+                        onClick={() => {
+                          const cycles = advancedData.swallowingAnalysis.cycles;
+                          const headers = [
+                            '吞咽次数',
+                            '咽腔收缩率PCR',
+                            '误吸误咽风险',
+                            '最大比值',
+                            '会厌谿/梨状窦残留',
+                            '残留比值',
+                            '舌骨最大位移（x）',
+                            '舌骨最大位移（y）',
+                            '舌骨最大位移（xy）',
+                            'UES开放幅度(UOR)'
+                          ];
+                          
+                          const csvContent = [
+                            headers.join(','),
+                            ...cycles.map((cycle: any) => [
+                              `第${cycle.cycleNumber}次吞咽`,
+                              cycle.PCR ? cycle.PCR.toFixed(3) : 'N/A',
+                              cycle.aspirationRisk ? '存在风险' : '无风险',
+                              cycle.maxOverlapRatio ? cycle.maxOverlapRatio.toFixed(3) : 'N/A',
+                              cycle.residueRisk ? '存在残留' : '无残留',
+                              cycle.residueRatio ? cycle.residueRatio.toFixed(3) : 'N/A',
+                              cycle.MHY_normalized_hyoid_relative_x !== null && cycle.HYB_normalized_hyoid_relative_x !== null ? 
+                                (cycle.MHY_normalized_hyoid_relative_x - cycle.HYB_normalized_hyoid_relative_x).toFixed(3) : 'N/A',
+                              cycle.MHY_normalized_hyoid_relative_y !== null && cycle.HYB_normalized_hyoid_relative_y !== null ? 
+                                (cycle.MHY_normalized_hyoid_relative_y - cycle.HYB_normalized_hyoid_relative_y).toFixed(3) : 'N/A',
+                              cycle.MHY_normalized_hyoid_c4_distance !== null && cycle.HYB_normalized_hyoid_c4_distance !== null ? 
+                                (cycle.MHY_normalized_hyoid_c4_distance - cycle.HYB_normalized_hyoid_c4_distance).toFixed(3) : 'N/A',
+                              cycle.UESmax_normalizedValue ? cycle.UESmax_normalizedValue.toFixed(3) : 'N/A'
+                            ].join(','))
+                          ].join('\n');
+                          
+                          const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+                          const link = document.createElement('a');
+                          const url = URL.createObjectURL(blob);
+                          link.setAttribute('href', url);
+                          link.setAttribute('download', 'kinematic_parameters_analysis.csv');
+                          link.style.visibility = 'hidden';
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        }}
+                        style={{
+                          padding: '10px 20px',
+                          backgroundColor: '#6f42c1',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontSize: '14px',
+                          fontWeight: 'bold'
+                        }}
+                      >
+                        📥 下载运动学参数表格 (CSV)
+                      </button>
+                    </div>
+                  </div>
+                  
                   {/* 时间学参数表格 */}
                   <div style={{ 
                     marginTop: 24, 
@@ -3690,6 +4373,9 @@ function App() {
                         <thead>
                           <tr style={{ backgroundColor: '#17a2b8', color: 'white' }}>
                             <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>吞咽次数</th>
+                            <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>起始时间 (BPM)</th>
+                            <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>结束时间 (SWALLOW REST)</th>
+                            <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>持续时间 (BPM-SWRT)</th>
                             <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>吞咽反应时间<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(HYB-BPM)</span></th>
                             <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>咽部反应时间<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(UESO-HYB)</span></th>
                             <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>UES打开持续时间<br/><span style={{ fontSize: '10px', fontWeight: 'normal' }}>(UESC-UESO)</span></th>
@@ -3736,6 +4422,36 @@ function App() {
                               <tr key={index} style={{ backgroundColor: index % 2 === 0 ? '#f9f9f9' : 'white' }}>
                                 <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center', fontWeight: 'bold' }}>
                                   第{cycle.cycleNumber}次吞咽
+                                </td>
+                                <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
+                                  <div>
+                                    <div style={{ fontWeight: 'bold' }}>
+                                      {cycle.startFrame} 帧
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: '#666' }}>
+                                      {cycle.startTime.toFixed(2)} 秒
+                                    </div>
+                                  </div>
+                                </td>
+                                <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
+                                  <div>
+                                    <div style={{ fontWeight: 'bold' }}>
+                                      {cycle.endFrame} 帧
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: '#666' }}>
+                                      {cycle.endTime.toFixed(2)} 秒
+                                    </div>
+                                  </div>
+                                </td>
+                                <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
+                                  <div>
+                                    <div style={{ fontWeight: 'bold' }}>
+                                      {cycle.duration} 帧
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: '#666' }}>
+                                      {cycle.durationTime.toFixed(2)} 秒
+                                    </div>
+                                  </div>
                                 </td>
                                 <td style={{ padding: '10px', border: '1px solid #ddd', textAlign: 'center' }}>
                                   {swallowReactionTimeFrames !== null ? (
@@ -3822,6 +4538,115 @@ function App() {
                       textAlign: 'center'
                     }}>
                       <strong>时间学参数说明：</strong> 正值表示时间顺序正确，负值表示时间顺序异常
+                    </div>
+                    
+                    {/* 时间学参数表格下载按钮 */}
+                    <div style={{ 
+                      marginTop: '15px',
+                      textAlign: 'center'
+                    }}>
+                      <button
+                        onClick={() => {
+                          if (!advancedData?.swallowingAnalysis?.cycles) return;
+                          
+                          const cycles = advancedData.swallowingAnalysis.cycles;
+                          const fps = summary?.fps || 30; // 使用实际帧率，如果没有则默认30fps
+                          
+                          const headers = [
+                            '吞咽次数',
+                            '起始时间',
+                            '结束时间',
+                            '持续时间',
+                            '吞咽反应时间',
+                            '咽部反应时间',
+                            'UES打开持续时间',
+                            'LVC反应时间',
+                            'LVC持续时间'
+                          ];
+                          
+                          const csvContent = [
+                            `视频帧率: ${fps} FPS`,
+                            headers.join(','),
+                            ...cycles.flatMap((cycle: any) => {
+                              // 计算时间学参数
+                              const swallowReactionTimeFrames = cycle.HYB !== null && cycle.startFrame !== null ? 
+                                cycle.HYB - cycle.startFrame : null;
+                              const swallowReactionTimeSeconds = swallowReactionTimeFrames !== null ? 
+                                swallowReactionTimeFrames / fps : null;
+                              
+                              const pharyngealResponseTimeFrames = cycle.UESO !== null && cycle.HYB !== null ? 
+                                cycle.UESO - cycle.HYB : null;
+                              const pharyngealResponseTimeSeconds = pharyngealResponseTimeFrames !== null ? 
+                                pharyngealResponseTimeFrames / fps : null;
+                              
+                              const uesOpenDurationFrames = cycle.UESC !== null && cycle.UESO !== null ? 
+                                cycle.UESC - cycle.UESO : null;
+                              const uesOpenDurationSeconds = uesOpenDurationFrames !== null ? 
+                                uesOpenDurationFrames / fps : null;
+                              
+                              const lvcReactionTimeFrames = cycle.LVC !== null && cycle.HYB !== null ? 
+                                cycle.LVC - cycle.HYB : null;
+                              const lvcReactionTimeSeconds = lvcReactionTimeFrames !== null ? 
+                                lvcReactionTimeFrames / fps : null;
+                              
+                              const lvcDurationFrames = cycle.LVCoff !== null && cycle.LVC !== null ? 
+                                cycle.LVCoff - cycle.LVC : null;
+                              const lvcDurationSeconds = lvcDurationFrames !== null ? 
+                                lvcDurationFrames / fps : null;
+                              
+                              // 返回两行数据：帧数行和秒数行
+                              return [
+                                // 帧数行
+                                [
+                                  `第${cycle.cycleNumber}次吞咽(帧)`,
+                                  cycle.startFrame || 'N/A',
+                                  cycle.endFrame || 'N/A',
+                                  cycle.duration || 'N/A',
+                                  swallowReactionTimeFrames !== null ? swallowReactionTimeFrames : 'N/A',
+                                  pharyngealResponseTimeFrames !== null ? pharyngealResponseTimeFrames : 'N/A',
+                                  uesOpenDurationFrames !== null ? uesOpenDurationFrames : 'N/A',
+                                  lvcReactionTimeFrames !== null ? lvcReactionTimeFrames : 'N/A',
+                                  lvcDurationFrames !== null ? lvcDurationFrames : 'N/A'
+                                ].join(','),
+                                // 秒数行
+                                [
+                                  `第${cycle.cycleNumber}次吞咽(秒)`,
+                                  cycle.startTime ? cycle.startTime.toFixed(2) : 'N/A',
+                                  cycle.endTime ? cycle.endTime.toFixed(2) : 'N/A',
+                                  cycle.durationTime ? cycle.durationTime.toFixed(2) : 'N/A',
+                                  swallowReactionTimeSeconds !== null ? swallowReactionTimeSeconds.toFixed(3) : 'N/A',
+                                  pharyngealResponseTimeSeconds !== null ? pharyngealResponseTimeSeconds.toFixed(3) : 'N/A',
+                                  uesOpenDurationSeconds !== null ? uesOpenDurationSeconds.toFixed(3) : 'N/A',
+                                  lvcReactionTimeSeconds !== null ? lvcReactionTimeSeconds.toFixed(3) : 'N/A',
+                                  lvcDurationSeconds !== null ? lvcDurationSeconds.toFixed(3) : 'N/A'
+                                ].join(',')
+                              ];
+                            })
+                          ].join('\n');
+                          
+                          const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+                          const link = document.createElement('a');
+                          const url = URL.createObjectURL(blob);
+                          link.setAttribute('href', url);
+                          link.setAttribute('download', 'temporal_parameters_analysis.csv');
+                          link.style.visibility = 'hidden';
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        }}
+                        style={{
+                          padding: '10px 20px',
+                          backgroundColor: '#17a2b8',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontSize: '14px',
+                          fontWeight: 'bold'
+                        }}
+                      >
+                        📥 下载时间学参数表格 (CSV)
+                      </button>
                     </div>
                   </div>
                 </div>
