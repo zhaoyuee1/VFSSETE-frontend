@@ -4,11 +4,7 @@ import ReactECharts from 'echarts-for-react';
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
 
-// 调试信息：检查环境变量
-console.log('Environment Variables Debug:');
-console.log('VITE_BACKEND_URL:', import.meta.env.VITE_BACKEND_URL);
-console.log('All env vars:', import.meta.env);
-console.log('Final BACKEND URL:', BACKEND);
+// 环境变量配置
 
 // Savitzky-Golay平滑滤波函数
 const savitzkyGolayFilter = (data: number[], windowSize: number = 5, order: number = 2): number[] => {
@@ -66,7 +62,7 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
   if (p95Value < 0 && p5Value < 0) {
     adjustedP95 = Math.abs(p95Value);
     adjustedP5 = Math.abs(p5Value);
-    console.log(`周期 ${cycleNumber}: 检测到负值，使用绝对值处理`);
+    // 检测到负值，使用绝对值处理
   }
   // 如果混合正负值，使用偏移处理
   else if (p95Value < 0 || p5Value < 0) {
@@ -74,14 +70,13 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     const offset = Math.abs(minValue) + 0.1; // 偏移量确保所有值都为正
     adjustedP95 = p95Value + offset;
     adjustedP5 = p5Value + offset;
-    console.log(`周期 ${cycleNumber}: 混合正负值，使用偏移处理，偏移量=${offset.toFixed(3)}`);
+    // 混合正负值，使用偏移处理
   }
   
   // PCR = 最小值/最大值 = 5%分位数/95%分位数
   const PCR = adjustedP5 / adjustedP95;
   
-  console.log(`周期 ${cycleNumber}: PCR计算 - 95%分位数=${p95Value.toFixed(3)}, 5%分位数=${p5Value.toFixed(3)}`);
-  console.log(`   调整后: 95%分位数=${adjustedP95.toFixed(3)}, 5%分位数=${adjustedP5.toFixed(3)}, PCR=${PCR.toFixed(3)}`);
+  // PCR计算完成
   
   // 参数2: 误吸误咽检测 (Aspiration Risk Assessment)
   // 使用 Normalized_bolus_vestibule_overlap / Normalized_vestibule 的比值判断
@@ -140,9 +135,7 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
       
       overlapRatioDetails = overlapDetails;
       
-      console.log(`周期 ${cycleNumber}: 误吸误咽检测 - 使用Normalized数据`);
-      console.log(`   最大重叠比值=${maxOverlapRatio.toFixed(3)}, 阈值=${aspirationThreshold}, 存在风险=${aspirationRisk}`);
-      console.log(`   数据范围: overlap=[${Math.min(...bolusVestibuleOverlap).toFixed(3)}, ${Math.max(...bolusVestibuleOverlap).toFixed(3)}], vestibule=[${Math.min(...vestibule).toFixed(3)}, ${Math.max(...vestibule).toFixed(3)}]`);
+      // 误吸误咽检测完成
     }
   }
   
@@ -162,9 +155,7 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
       const residueThreshold = 0.2;
       residueRisk = residueRatio >= residueThreshold;
       
-      console.log(`周期 ${cycleNumber}: 会厌谿/梨状窦残留检测 - 结束帧${endFrame}`);
-      console.log(`   bolus_pharynx_overlap=${endFrameData.normalized_bolus_pharynx_overlap.toFixed(3)}, pharynx=${endFrameData.normalized_pharynx.toFixed(3)}`);
-      console.log(`   残留比值=${residueRatio.toFixed(3)}, 阈值=${residueThreshold}, 存在残留=${residueRisk}`);
+      // 会厌谿/梨状窦残留检测完成
     }
   }
   
@@ -244,7 +235,7 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
       }
     }
     
-    console.log(`周期 ${cycleNumber}: HYB搜索范围拓宽 - 起始帧: ${searchStartFrame}`);
+    // HYB搜索范围拓宽
     
     // 3. 使用斜率计算找到峰值前的第一个谷底
     // 计算一阶差分（斜率）来识别真正的谷底
@@ -329,11 +320,7 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
       MHY_normalized_hyoid_relative_y = hyoidRelativeYNormalized[maxIndex];
     }
     
-    console.log(`周期 ${cycleNumber}: HYB检测完成`);
-    console.log(`   峰值: 帧${HYB_peakFrame}, 值=${HYB_peakValue.toFixed(3)}`);
-    console.log(`   谷底: 帧${HYB_valleyFrame}, 值=${HYB_valleyValue.toFixed(3)}`);
-    console.log(`   HYB帧: ${HYB} (谷底帧)`);
-    console.log(`   拓宽搜索范围: [${searchStartFrame}, ${startFrame + hyoidC4Distance.length - 1}]`);
+    // HYB检测完成
   }
   
   // UESO和UESC检测
@@ -395,7 +382,7 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
       }
     }
     
-    console.log(`周期 ${cycleNumber}: UES搜索范围拓宽 - 起始帧: ${searchStartFrame}, 结束帧: ${searchEndFrame}`);
+    // UES搜索范围拓宽
     
     // 4. 找到峰值前的谷底（UESO）
     let beforeValleyValue = maxValue;
@@ -504,18 +491,13 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
       UESmax_normalizedValue = uesLengthNormalized[maxIndex];
     }
     
-    console.log(`周期 ${cycleNumber}: UES检测完成`);
-    console.log(`   峰值: 帧${UES_peakFrame}, 值=${UES_peakValue.toFixed(3)}`);
-    console.log(`   峰值前谷底(UESO): 帧${UES_beforeValleyFrame}, 值=${UES_beforeValleyValue.toFixed(3)}`);
-    console.log(`   峰值后谷底(UESC): 帧${UES_afterValleyFrame}, 值=${UES_afterValleyValue.toFixed(3)}`);
-    console.log(`   UESO帧: ${UESO}, UESC帧: ${UESC}`);
-    console.log(`   拓宽搜索范围: [${searchStartFrame}, ${searchEndFrame}]`);
+    // UES检测完成
   }
   
   // LVC和LVCoff检测
   const vestibuleData = cycleData.map(row => row.zscore_vestibule).filter(val => val !== null);
   
-  console.log(`周期 ${cycleNumber}: vestibuleData长度=${vestibuleData.length}, 前5个值=[${vestibuleData.slice(0, 5).map(v => v.toFixed(3)).join(', ')}], 后5个值=[${vestibuleData.slice(-5).map(v => v.toFixed(3)).join(', ')}]`);
+  // vestibuleData处理
   
   if (vestibuleData.length > 0) {
     // 1. 计算拓宽的搜索范围（与HYB/UESO/UESC保持一致）
@@ -545,7 +527,7 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
       }
     }
     
-    console.log(`周期 ${cycleNumber}: LVC搜索范围拓宽 - 起始帧: ${searchStartFrame}, 结束帧: ${searchEndFrame}`);
+    // LVC搜索范围拓宽
     
     // 计算拓宽搜索范围在当前周期数据中的索引
     const searchStartInCycle = Math.max(0, searchStartFrame - startFrame);
@@ -562,7 +544,7 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     const cycleStartInData = 0;  // 当前周期在vestibuleData中的起始位置
     const cycleEndInData = vestibuleData.length - 1;  // 当前周期在vestibuleData中的结束位置
     
-    console.log(`周期 ${cycleNumber}: 谷底1搜索范围 - 数据索引[${cycleStartInData}, ${cycleEndInData}], 数据长度: ${vestibuleData.length}`);
+    // 谷底1搜索范围
     
     // 首先找到绝对最低值
     let absoluteMinValue = vestibuleData[0];
@@ -578,7 +560,7 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     const valleyThreshold = 0.02;  // 允许0.02的偏差范围
     const valleyRangeMin = absoluteMinValue + valleyThreshold;
     
-    console.log(`周期 ${cycleNumber}: 绝对最低值=${absoluteMinValue.toFixed(3)} (索引${absoluteMinIndex}), 谷底范围阈值=${valleyThreshold}, 谷底范围上限=${valleyRangeMin.toFixed(3)}`);
+    // 绝对最低值计算
     
     // 从前往后搜索，找到第一个进入最低范围的值
     let valley1Value = absoluteMinValue;
@@ -588,7 +570,7 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
       if (vestibuleData[i] <= valleyRangeMin) {
         valley1Value = vestibuleData[i];
         valley1Index = i;
-        console.log(`周期 ${cycleNumber}: 找到谷底1 - 索引${i}, 值=${valley1Value.toFixed(3)} (进入最低范围)`);
+        // 找到谷底1
         break;
       }
     }
@@ -596,7 +578,7 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     LVC_valley1Value = valley1Value;
     LVC_valley1Frame = startFrame + valley1Index;
     
-    console.log(`周期 ${cycleNumber}: 谷底1搜索结果 - 帧${LVC_valley1Frame}, 值=${LVC_valley1Value.toFixed(3)}, 数据索引${valley1Index}`);
+    // 谷底1搜索结果
     
     // 4. 从谷底1向前搜索，找到第一个峰值（LVC）
     let peakValue = valley1Value;
@@ -669,14 +651,13 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     
     // 5. 从谷底1向后搜索，找到谷底2（LVCoff）
     // 谷底2应该是最低范围内波动的最后一帧，而不是通过差分搜索
-    console.log(`周期 ${cycleNumber}: 开始搜索谷底2，从谷底1(索引${valley1Index}, 值${valley1Value.toFixed(3)})向后搜索到索引${searchEndInCycle}`);
-    console.log(`周期 ${cycleNumber}: 搜索范围详情 - 谷底1索引:${valley1Index}, 搜索结束索引:${searchEndInCycle}, 数据总长度:${vestibuleData.length}`);
+    // 开始搜索谷底2
     
     // 使用与谷底1相同的谷底范围阈值
     const valley2Threshold = 0.02;  // 与谷底1使用相同的阈值
     const valley2RangeMin = absoluteMinValue + valley2Threshold;
     
-    console.log(`周期 ${cycleNumber}: 谷底2搜索 - 使用谷底范围上限=${valley2RangeMin.toFixed(3)}`);
+    // 谷底2搜索
     
     // 从谷底1向后搜索，找到最后一个在最低范围内的值
     let valley2Value = valley1Value;
@@ -696,22 +677,16 @@ const extractCycleParameters = (startFrame: number, endFrame: number, processedD
     }
     
     if (foundValley2) {
-      console.log(`周期 ${cycleNumber}: 找到谷底2 - 索引${valley2Index}, 值=${valley2Value.toFixed(3)} (最低范围内最后一帧)`);
+      // 找到谷底2
     } else {
-      console.log(`周期 ${cycleNumber}: 未找到谷底2，使用谷底1作为谷底2`);
+      // 未找到谷底2，使用谷底1作为谷底2
     }
     
     LVC_valley2Value = valley2Value;
     LVC_valley2Frame = startFrame + valley2Index;
     LVCoff = startFrame + valley2Index;
     
-    console.log(`周期 ${cycleNumber}: LVC检测完成（使用二阶差分提高精度）`);
-    console.log(`   谷底1: 帧${LVC_valley1Frame}, 值=${LVC_valley1Value.toFixed(3)}`);
-    console.log(`   峰值(LVC): 帧${LVC_peakFrame}, 值=${LVC_peakValue.toFixed(3)}`);
-    console.log(`   谷底2(LVCoff): 帧${LVC_valley2Frame}, 值=${LVC_valley2Value.toFixed(3)}`);
-    console.log(`   LVC帧: ${LVC}, LVCoff帧: ${LVCoff}`);
-    console.log(`   拓宽搜索范围: [${searchStartFrame}, ${searchEndFrame}]`);
-    console.log(`   检测方法: 二阶差分阈值±0.1，一阶差分阈值±0.15`);
+    // LVC检测完成
   }
   
   return {
@@ -846,7 +821,7 @@ const detectSwallowingCycles = (zscoreData: number[], processedData: any[], fps:
     
     // 1. 计算整个数据集的真正最低值作为基线
     const globalMin = Math.min(...smoothedData);
-    console.log(`周期 ${i + 1}: 全局最低值 = ${globalMin.toFixed(3)}`);
+    // 全局最低值计算
     
     // 2. 寻找起始帧：从前一个周期结束帧之后开始搜索
     if (i === 0) {
@@ -862,7 +837,7 @@ const detectSwallowingCycles = (zscoreData: number[], processedData: any[], fps:
     } else {
       // 第2次及以后的吞咽：从前一次结束帧之后开始搜索
       const searchStartFrame = lastEndFrame + 1;
-      console.log(`周期 ${i + 1}: 从前一次结束帧 ${lastEndFrame} 之后开始搜索，搜索起始帧 = ${searchStartFrame}`);
+      // 从前一次结束帧之后开始搜索
       
       // 在搜索范围内寻找最低点
       let localMin = smoothedData[peakFrame];
@@ -884,7 +859,7 @@ const detectSwallowingCycles = (zscoreData: number[], processedData: any[], fps:
         }
       }
       
-      console.log(`周期 ${i + 1}: 局部最低点 = ${localMin.toFixed(3)} (帧${localMinIndex}), 起始帧 = ${startFrame}`);
+      // 局部最低点计算
     }
     
     // 3. 寻找结束帧：从峰值向后搜索，找到回到基线后的稳定期
@@ -912,7 +887,7 @@ const detectSwallowingCycles = (zscoreData: number[], processedData: any[], fps:
       }
     }
     
-    console.log(`周期 ${i + 1}: 后局部最低点 = ${postLocalMin.toFixed(3)} (帧${postLocalMinIndex}), 结束帧 = ${endFrame}`);
+    // 后局部最低点计算
     
     // 4. 验证周期合理性
     const cycleLength = endFrame - startFrame;
@@ -946,11 +921,10 @@ const detectSwallowingCycles = (zscoreData: number[], processedData: any[], fps:
       
       // 更新上一个周期的结束帧
       lastEndFrame = endFrame;
-      console.log(`✅ 周期 ${i + 1} 成功: 起始帧=${startFrame}, 峰值帧=${peakFrame}, 结束帧=${endFrame}, 长度=${cycleLength}`);
-      console.log(`   医学参数: PCR=${cycleParameters.PCR?.toFixed(3)}, 其他参数...`);
+      // 周期检测成功
     } else {
-      console.warn(`❌ 周期 ${i + 1} 被跳过: 起始帧=${startFrame}, 峰值帧=${peakFrame}, 上一个结束帧=${lastEndFrame}, 周期长度=${cycleLength}`);
-      console.warn(`   合理性=${isReasonableLength}, 连续性=${isSequential}, 有效起始=${hasValidStart}, 有效结束=${hasValidEnd}`);
+      // 周期被跳过
+      // 周期验证完成
     }
   }
   
@@ -1156,11 +1130,7 @@ const processAdvancedData = (originalAreas: any[], referenceC2C4: number) => {
     // 修复：确保标准差不为0，避免除零错误
     const finalStdDev = stdDev > 0 ? stdDev : 1;
     
-    console.log(`Z-score计算 - 参数组: ${paramNames.join(', ')}`);
-    console.log(`  有效值数量: ${groupValues.length}`);
-    console.log(`  均值: ${mean.toFixed(6)}`);
-    console.log(`  标准差: ${stdDev.toFixed(6)} (使用: ${finalStdDev.toFixed(6)})`);
-    console.log(`  数值范围: [${Math.min(...(groupValues as number[])).toFixed(6)}, ${Math.max(...(groupValues as number[])).toFixed(6)}]`);
+    // Z-score计算完成
     
     return { mean, stdDev: finalStdDev };
   };
@@ -1210,7 +1180,7 @@ const processAdvancedData = (originalAreas: any[], referenceC2C4: number) => {
     }
   };
   
-  console.log('Z-score验证结果:', zscoreValidation);
+  // Z-score验证完成
   
   return {
     reference: referenceC2C4,
@@ -1261,13 +1231,6 @@ type Summary = {
       hyoid_c4_distance: number | null;
       ues_length: number | null;
       coordinate_system_valid: boolean;
-      // 新增：bolus流动线参数
-      bolus_front_x: number | null;
-      bolus_front_y: number | null;
-      bolus_back_x: number | null;
-      bolus_back_y: number | null;
-      bolus_track_length: number | null;
-      bolus_track_valid: boolean;
     }>;
     points: Array<{
       UESout?: { x: number; y: number; p: number } | null;
@@ -1381,14 +1344,14 @@ function App() {
     try {
       setProcessingAdvanced(true);
       setAdvancedAnalysisError(null); // 清除之前的错误信息
-      console.log('开始高级分析处理...');
+      // 开始高级分析处理
       
       // 计算c2c4_length的中值作为reference
       const validC2C4Lengths = summary.signals.areas
         .map(area => area.c2c4_length)
         .filter(length => length !== null && length > 0);
       
-      console.log('有效C2C4长度数量:', validC2C4Lengths.length);
+      // 有效C2C4长度数量
       
       if (validC2C4Lengths.length === 0) {
         throw new Error('没有有效的C2C4长度数据');
@@ -1400,34 +1363,33 @@ function App() {
         ? (sortedLengths[midIndex - 1]! + sortedLengths[midIndex]!) / 2
         : sortedLengths[midIndex]!;
       
-      console.log('参考C2C4长度:', reference);
+      // 参考C2C4长度
       
       // 处理高级数据
-      console.log('开始处理高级数据...');
+      // 开始处理高级数据
       const processedData = processAdvancedData(summary.signals.areas, reference);
-      console.log('高级数据处理完成:', processedData);
+      // 高级数据处理完成
       
       // 检测吞咽周期
-      console.log('开始检测吞咽周期...');
+      // 开始检测吞咽周期
       const zscoreBolusPharynxOverlap = processedData.processedData.map((row: any) => row.zscore_bolus_pharynx_overlap);
-      console.log('Z-score数据长度:', zscoreBolusPharynxOverlap.length);
-      console.log('Z-score数据样本:', zscoreBolusPharynxOverlap.slice(0, 10));
+      // Z-score数据准备完成
       
       let swallowingAnalysis = detectSwallowingCycles(zscoreBolusPharynxOverlap, processedData.processedData, summary.fps || 30);
-      console.log('吞咽周期检测完成:', swallowingAnalysis);
+      // 吞咽周期检测完成
       
       // 验证吞咽分析结果
       if (!swallowingAnalysis || !('cycles' in swallowingAnalysis) || !swallowingAnalysis.cycles || swallowingAnalysis.cycles.length === 0) {
-        console.warn('未检测到吞咽周期，尝试调整参数...');
+        // 未检测到吞咽周期，尝试调整参数
         // 尝试使用更宽松的参数
         const relaxedAnalysis = detectSwallowingCycles(zscoreBolusPharynxOverlap, processedData.processedData, summary.fps || 30, 0.1, 10);
-        console.log('宽松参数检测结果:', relaxedAnalysis);
+        // 宽松参数检测结果
         
         if (relaxedAnalysis && 'cycles' in relaxedAnalysis && relaxedAnalysis.cycles && relaxedAnalysis.cycles.length > 0) {
-          console.log('使用宽松参数成功检测到吞咽周期');
+          // 使用宽松参数成功检测到吞咽周期
           swallowingAnalysis = relaxedAnalysis;
         } else {
-          console.warn('即使使用宽松参数仍未检测到吞咽周期');
+          // 即使使用宽松参数仍未检测到吞咽周期
         }
       }
       
@@ -1436,15 +1398,15 @@ function App() {
         swallowingAnalysis
       };
       
-      console.log('设置高级分析数据:', finalAdvancedData);
+      // 设置高级分析数据
       setAdvancedData(finalAdvancedData);
       setShowAdvancedAnalysis(true);
       
       // 生成并下载新的CSV
-      console.log('生成CSV文件...');
+      // 生成CSV文件
       generateAdvancedCSV(processedData);
       
-      console.log('高级分析完成！');
+      // 高级分析完成
       
     } catch (error) {
       console.error('高级分析处理失败:', error);
@@ -1592,7 +1554,12 @@ function App() {
         max: Math.max(...xValues) + margin,
         splitLine: { show: true, lineStyle: { type: 'dashed', color: '#e0e0e0' } },
         axisLine: { lineStyle: { color: '#333' } },
-        axisTick: { show: true }
+        axisTick: { show: true },
+        axisLabel: {
+          formatter: function(value: number) {
+            return value.toFixed(1);
+          }
+        }
       },
       yAxis: { 
         type: 'value', 
@@ -1603,7 +1570,12 @@ function App() {
         max: Math.max(...yValues) + margin,
         splitLine: { show: true, lineStyle: { type: 'dashed', color: '#e0e0e0' } },
         axisLine: { lineStyle: { color: '#333' } },
-        axisTick: { show: true }
+        axisTick: { show: true },
+        axisLabel: {
+          formatter: function(value: number) {
+            return value.toFixed(1);
+          }
+        }
       },
       series: [
         { 
@@ -1679,209 +1651,7 @@ function App() {
     };
   }, [summary]);
 
-  const bolusTrajectoryChartOption = useMemo(() => {
-    const areas = summary?.signals?.areas ?? [];
-    if (!areas.length) return undefined;
-    
-    // 过滤出有效的bolus追踪数据
-    const validData = areas
-      .map((area, frameIdx) => ({
-        frame: frameIdx,
-        front_x: area.bolus_front_x,
-        front_y: area.bolus_front_y,
-        back_x: area.bolus_back_x,
-        back_y: area.bolus_back_y,
-        valid: area.bolus_track_valid && 
-               area.bolus_front_x !== null && 
-               area.bolus_front_y !== null &&
-               area.bolus_back_x !== null && 
-               area.bolus_back_y !== null
-      }))
-      .filter(item => item.valid);
-    
-    if (!validData.length) return undefined;
-
-    // 分离前端和后端数据
-    const frontData = validData.map(item => [item.front_x, item.front_y]);
-    const backData = validData.map(item => [item.back_x, item.back_y]);
-
-    // 计算坐标范围，添加边距
-    const allX = [...validData.map(item => item.front_x!), ...validData.map(item => item.back_x!)];
-    const allY = [...validData.map(item => item.front_y!), ...validData.map(item => item.back_y!)];
-    const xRange = Math.max(...allX) - Math.min(...allX);
-    const yRange = Math.max(...allY) - Math.min(...allY);
-    const margin = Math.max(xRange, yRange) * 0.1; // 10%边距
-
-    return {
-      title: { 
-        text: 'Bolus Front/Back End Trajectory (Relative Coordinates)',
-        left: 'center',
-        top: 10,
-        textStyle: { fontSize: 18, fontWeight: 'bold' },
-        itemGap: 20
-      },
-      tooltip: {
-        trigger: 'item',
-        formatter: function(params: any) {
-          const dataIndex = params.dataIndex;
-          const item = validData[dataIndex];
-          return `Frame: ${item.frame}<br/>
-                  Front: (${item.front_x?.toFixed(2)}, ${item.front_y?.toFixed(2)})<br/>
-                  Back: (${item.back_x?.toFixed(2)}, ${item.back_y?.toFixed(2)})`;
-        }
-      },
-      legend: { 
-        data: ['Front End', 'Back End', 'Front Trajectory', 'Back Trajectory'],
-        top: 60,
-        itemGap: 20,
-        textStyle: { fontSize: 12 }
-      },
-      grid: { 
-        left: 60, 
-        right: 20, 
-        top: 120, 
-        bottom: 50,
-        containLabel: true
-      },
-      xAxis: { 
-        type: 'value', 
-        name: 'Relative X (perpendicular to C2C4)',
-        nameLocation: 'middle',
-        nameGap: 30,
-        min: Math.min(...allX) - margin,
-        max: Math.max(...allX) + margin,
-        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#e0e0e0' } },
-        axisLine: { lineStyle: { color: '#333' } },
-        axisTick: { show: true }
-      },
-      yAxis: { 
-        type: 'value', 
-        name: 'Relative Y (along C2C4)',
-        nameLocation: 'middle',
-        nameGap: 40,
-        min: Math.min(...allY) - margin,
-        max: Math.max(...allY) + margin,
-        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#e0e0e0' } },
-        axisLine: { lineStyle: { color: '#333' } },
-        axisTick: { show: true }
-      },
-      series: [
-        { 
-          type: 'scatter', 
-          name: 'Front End',
-          data: frontData, 
-          symbolSize: function(value: any, params: any) {
-            // 根据帧数调整点的大小
-            const frameIdx = validData[params.dataIndex].frame;
-            if (frameIdx === 0) return 12; // 起始点更大
-            if (frameIdx === validData.length - 1) return 12; // 结束点更大
-            return 6; // 中间点较小
-          },
-          itemStyle: { 
-            color: function(params: any) {
-              // 根据帧数渐变颜色，显示运动方向
-              const frameIdx = validData[params.dataIndex].frame;
-              const progress = frameIdx / (validData.length - 1);
-              return `hsl(${0 + progress * 60}, 80%, 60%)`; // 从红色渐变到橙色
-            }
-          },
-          emphasis: {
-            itemStyle: {
-              borderColor: '#fff',
-              borderWidth: 2,
-              shadowBlur: 10,
-              shadowColor: 'rgba(0,0,0,0.3)'
-            }
-          }
-        },
-        {
-          type: 'line',
-          name: 'Front Trajectory',
-          data: frontData,
-          smooth: true,
-          lineStyle: { 
-            width: 3, 
-            color: '#ff6b6b',
-            shadowBlur: 5,
-            shadowColor: 'rgba(0,0,0,0.2)'
-          },
-          showSymbol: false,
-          emphasis: {
-            lineStyle: { width: 5 }
-          }
-        },
-        { 
-          type: 'scatter', 
-          name: 'Back End',
-          data: backData, 
-          symbolSize: function(value: any, params: any) {
-            // 根据帧数调整点的大小
-            const frameIdx = validData[params.dataIndex].frame;
-            if (frameIdx === 0) return 12; // 起始点更大
-            if (frameIdx === validData.length - 1) return 12; // 结束点更大
-            return 6; // 中间点较小
-          },
-          itemStyle: { 
-            color: function(params: any) {
-              // 根据帧数渐变颜色，显示运动方向
-              const frameIdx = validData[params.dataIndex].frame;
-              const progress = frameIdx / (validData.length - 1);
-              return `hsl(${180 + progress * 60}, 80%, 60%)`; // 从青色渐变到蓝色
-            }
-          },
-          emphasis: {
-            itemStyle: {
-              borderColor: '#fff',
-              borderWidth: 2,
-              shadowBlur: 10,
-              shadowColor: 'rgba(0,0,0,0.3)'
-            }
-          }
-        },
-        {
-          type: 'line',
-          name: 'Back Trajectory',
-          data: backData,
-          smooth: true,
-          lineStyle: { 
-            width: 3, 
-            color: '#4ecdc4',
-            shadowBlur: 5,
-            shadowColor: 'rgba(0,0,0,0.2)'
-          },
-          showSymbol: false,
-          emphasis: {
-            lineStyle: { width: 5 }
-          }
-        }
-      ],
-      // 添加数据缩放功能
-      dataZoom: [
-        {
-          type: 'inside',
-          xAxisIndex: 0,
-          filterMode: 'filter'
-        },
-        {
-          type: 'inside',
-          yAxisIndex: 0,
-          filterMode: 'filter'
-        }
-      ],
-      // 添加工具箱
-      toolbox: {
-        feature: {
-          dataZoom: { title: 'Zoom' },
-          restore: { title: 'Restore' },
-          saveAsImage: { title: 'Save' }
-        },
-        right: 20,
-        top: 20,
-        itemSize: 16,
-        itemGap: 8
-      }
-    };
-  }, [summary]);
+  // bolus轨迹图表已移除
 
   const downloadCsv = () => {
     if (!jobId) return;
@@ -1908,18 +1678,24 @@ function App() {
       });
     }
     
-    // 2. 该患者存在误吸误咽：bolus和vestibule重合面积最大的帧
+    // 2. 该患者存在误吸误咽：bolus和vestibule重合面积最大的帧，且比值>0.2
     const maxVestibuleOverlapIndex = areas.reduce((maxIndex, area, index) => 
       area.bolus_vestibule_overlap > areas[maxIndex].bolus_vestibule_overlap ? index : maxIndex, 0
     );
-    if (areas[maxVestibuleOverlapIndex].bolus_vestibule_overlap > 0) {
-      specialMoments.push({
-        frame_index: maxVestibuleOverlapIndex,
-        mask_url: `${BACKEND}/jobs/${jobId}/frames/${maxVestibuleOverlapIndex}/mask.png`,
-        overlay_url: `${BACKEND}/jobs/${jobId}/frames/${maxVestibuleOverlapIndex}/overlay.png`,
-        frame_name: "该患者存在误吸误咽",
-        is_special_moment: true
-      });
+    
+    // 检查最大重叠帧的比值条件
+    const maxOverlapArea = areas[maxVestibuleOverlapIndex];
+    if (maxOverlapArea.bolus_vestibule_overlap > 0 && maxOverlapArea.vestibule > 0) {
+      const overlapRatio = maxOverlapArea.bolus_vestibule_overlap / maxOverlapArea.vestibule;
+      if (overlapRatio > 0.2) {
+        specialMoments.push({
+          frame_index: maxVestibuleOverlapIndex,
+          mask_url: `${BACKEND}/jobs/${jobId}/frames/${maxVestibuleOverlapIndex}/mask.png`,
+          overlay_url: `${BACKEND}/jobs/${jobId}/frames/${maxVestibuleOverlapIndex}/overlay.png`,
+          frame_name: "该患者存在误吸误咽",
+          is_special_moment: true
+        });
+      }
     }
     
     // 3. 舌骨峰值：hyoid_c4_distance最大的帧
@@ -1937,7 +1713,56 @@ function App() {
       });
     }
     
-    // 4. 咽腔收缩最大和最小帧
+    // 4. 会厌谿/梨状窦残留：找到第一个bolus_pharynx_overlap峰值，向后搜索变化帧
+    const bolusPharynxOverlap = areas.map(area => area.bolus_pharynx_overlap);
+    
+    // 找到第一个峰值（局部最大值）
+    let peakIndex = -1;
+    for (let i = 1; i < bolusPharynxOverlap.length - 1; i++) {
+      if (bolusPharynxOverlap[i] > bolusPharynxOverlap[i-1] && 
+          bolusPharynxOverlap[i] > bolusPharynxOverlap[i+1] &&
+          bolusPharynxOverlap[i] > 0) {
+        peakIndex = i;
+        break; // 找到第一个峰值就停止
+      }
+    }
+    
+    if (peakIndex !== -1) {
+      // 从峰值开始向后搜索，使用一阶差分找到变化帧
+      let changeIndex = -1;
+      for (let i = peakIndex + 1; i < bolusPharynxOverlap.length; i++) {
+        // 计算一阶差分：当前值 - 前一个值
+        const diff = bolusPharynxOverlap[i] - bolusPharynxOverlap[i-1];
+        
+        // 寻找由负变正的变化（从下降趋势转为上升趋势）
+        if (diff > 0 && bolusPharynxOverlap[i-1] < bolusPharynxOverlap[i-2]) {
+          changeIndex = i;
+          break;
+        }
+      }
+      
+      // 如果没找到变化帧，使用最后一个有效帧
+      if (changeIndex === -1) {
+        changeIndex = bolusPharynxOverlap.length - 1;
+      }
+      
+      // 检查该帧的比值条件
+      const changeArea = areas[changeIndex];
+      if (changeArea.bolus_pharynx_overlap > 0 && changeArea.pharynx > 0) {
+        const pharynxOverlapRatio = changeArea.bolus_pharynx_overlap / changeArea.pharynx;
+        if (pharynxOverlapRatio > 0.2) {
+          specialMoments.push({
+            frame_index: changeIndex,
+            mask_url: `${BACKEND}/jobs/${jobId}/frames/${changeIndex}/mask.png`,
+            overlay_url: `${BACKEND}/jobs/${jobId}/frames/${changeIndex}/overlay.png`,
+            frame_name: "该患者存在会厌谿/梨状窦残留",
+            is_special_moment: true
+          });
+        }
+      }
+    }
+    
+    // 5. 咽腔收缩最大和最小帧
     const maxPharynxIndex = areas.reduce((maxIndex, area, index) => 
       area.pharynx > areas[maxIndex].pharynx ? index : maxIndex, 0
     );
@@ -1961,7 +1786,7 @@ function App() {
       is_special_moment: true
     });
     
-    // 5. 咽期吞咽结束：bolus和pharynx重合后再次不重合
+    // 6. 咽期吞咽结束：bolus和pharynx重合后再次不重合
     if (firstOverlapIndex !== -1) {
       const lastOverlapIndex = areas.findIndex((area, index) => 
         index > firstOverlapIndex && area.bolus_pharynx_overlap === 0
@@ -2100,13 +1925,13 @@ function App() {
         },
         axisLine: { lineStyle: { color: '#ff6b6b' } },
         axisTick: { show: true },
-        // 优化标签显示，大数值显示为k单位
+        // 优化标签显示，大数值显示为k单位，保留小数点后一位
         axisLabel: {
           formatter: function(value: number) {
             if (value >= 1000) {
               return (value / 1000).toFixed(1) + 'k';
             }
-            return value.toString();
+            return value.toFixed(1);
           }
         }
       },
@@ -2224,13 +2049,13 @@ function App() {
         },
         axisLine: { lineStyle: { color: '#ff6b6b' } },
         axisTick: { show: true },
-        // 优化标签显示，大数值显示为k单位
+        // 优化标签显示，大数值显示为k单位，保留小数点后一位
         axisLabel: {
           formatter: function(value: number) {
             if (value >= 1000) {
               return (value / 1000).toFixed(1) + 'k';
             }
-            return value.toString();
+            return value.toFixed(1);
           }
         }
       },
@@ -2411,7 +2236,12 @@ function App() {
             lineStyle: { type: 'dashed', color: '#e0e0e0' } 
           },
           axisLine: { lineStyle: { color: '#9c88ff' } },
-          axisTick: { show: true }
+          axisTick: { show: true },
+          axisLabel: {
+            formatter: function(value: number) {
+              return value.toFixed(1);
+            }
+          }
         },
         {
           type: 'value',
@@ -2636,7 +2466,12 @@ function App() {
             lineStyle: { type: 'dashed', color: '#e0e0e0' } 
           },
           axisLine: { lineStyle: { color: '#9c88ff' } },
-          axisTick: { show: true }
+          axisTick: { show: true },
+          axisLabel: {
+            formatter: function(value: number) {
+              return value.toFixed(1);
+            }
+          }
         },
         {
           type: 'value',
@@ -3194,12 +3029,6 @@ function App() {
                 </span>
               </div>
               <div>
-                <strong>Bolus Tracking:</strong> 
-                <span style={{ color: summary.signals?.areas?.some(a => a.bolus_track_valid) ? '#28a745' : '#dc3545' }}>
-                  {summary.signals?.areas?.some(a => a.bolus_track_valid) ? 'Active' : 'Inactive'}
-                </span>
-              </div>
-              <div>
                 <strong>Valid Hyoid Data:</strong> 
                 {summary.signals?.areas?.filter(a => a.hyoid_relative_x !== null && a.hyoid_relative_y !== null).length || 0} / {summary.frames}
               </div>
@@ -3386,7 +3215,7 @@ function App() {
                         <div style={{ 
                           width: '18px', 
                           height: '18px', 
-                          backgroundColor: '#00ffff', 
+                          backgroundColor: '#ffff00', 
                           borderRadius: '50%',
                           border: '2px solid #fff',
                           boxShadow: '0 0 0 1px #000'
@@ -3470,22 +3299,7 @@ function App() {
 
           {/* 三个图表 - 居中显示且宽度为屏幕的一半 */}
           <div style={{ marginTop: 24 }}>
-            {/* 调试信息 */}
-            <div style={{ 
-              marginBottom: '10px', 
-              padding: '10px', 
-              backgroundColor: '#f0f0f0', 
-              borderRadius: '4px',
-              fontSize: '12px',
-              fontFamily: 'monospace'
-            }}>
-              调试信息: showNormalized={showNormalized.toString()}, 
-              areaChartOption={areaChartOption ? '存在' : '不存在'}, 
-              normalizedAreaChartOption={normalizedAreaChartOption ? '存在' : '不存在'},
-              summary={summary ? '存在' : '不存在'},
-              summary.signals={summary?.signals ? '存在' : '不存在'},
-              summary.signals.areas={summary?.signals?.areas ? `存在(${summary.signals.areas.length}帧)` : '不存在'}
-            </div>
+            {/* 调试信息已隐藏 */}
             {showNormalized ? (
               // 显示归一化图表
               normalizedAreaChartOption && (
@@ -3528,13 +3342,6 @@ function App() {
             )}
           </div>
           <div style={{ marginTop: 24 }}>
-            {bolusTrajectoryChartOption && (
-              <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <div style={{ width: '50%', minWidth: '600px' }}>
-                  <ReactECharts option={bolusTrajectoryChartOption} style={{ height: 360 }} />
-                </div>
-              </div>
-            )}
           </div>
           <div style={{ marginTop: 24 }}>
             {hyoidChartOption && (
@@ -3593,7 +3400,7 @@ function App() {
                     onClick={() => {
                       setAdvancedAnalysisError(null);
                       // 确保清除错误后基础图表能正常显示
-                      console.log('清除错误信息，当前summary状态:', summary);
+                      // 清除错误信息
                     }}
                     style={{
                       marginTop: '10px',
@@ -3728,126 +3535,7 @@ function App() {
                 )}
               </div>
 
-              {/* 调试信息面板 */}
-              <div style={{ 
-                marginTop: 24, 
-                padding: '20px', 
-                border: '2px solid #ffc107', 
-                borderRadius: '12px',
-                backgroundColor: '#fff3cd',
-                width: '100%'
-              }}>
-                <h4 style={{ 
-                  margin: '0 0 15px 0', 
-                  color: '#856404',
-                  fontSize: '16px',
-                  fontWeight: 'bold'
-                }}>
-                   调试信息
-                </h4>
-                <div style={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', 
-                  gap: '16px',
-                  fontSize: '12px',
-                  fontFamily: 'monospace'
-                }}>
-                  <div>
-                    <strong>高级数据状态:</strong><br/>
-                    processedData: {advancedData?.processedData ? `${advancedData.processedData.length} 帧` : 'null'}<br/>
-                    reference: {advancedData?.reference ? advancedData.reference.toFixed(2) : 'null'}<br/>
-                    areaStats: {advancedData?.areaStats ? `均值=${advancedData.areaStats.mean.toFixed(2)}, 标准差=${advancedData.areaStats.stdDev.toFixed(2)}` : 'null'}
-                  </div>
-                  <div>
-                    <strong>吞咽分析状态:</strong><br/>
-                    swallowingAnalysis: {advancedData?.swallowingAnalysis ? '存在' : 'null'}<br/>
-                    totalSwallows: {advancedData?.swallowingAnalysis?.totalSwallows || 'N/A'}<br/>
-                    cycles: {advancedData?.swallowingAnalysis?.cycles ? `${advancedData.swallowingAnalysis.cycles.length} 个周期` : 'N/A'}
-                  </div>
-                  <div>
-                    <strong>Z-score数据样本:</strong><br/>
-                    {advancedData?.processedData ? 
-                      `前5帧: ${advancedData.processedData.slice(0, 5).map((row: any) => row.zscore_bolus_pharynx_overlap?.toFixed(3)).join(', ')}` : 
-                      'N/A'
-                    }
-                  </div>
-                  <div>
-                    <strong>峰值检测:</strong><br/>
-                    peaks: {advancedData?.swallowingAnalysis?.peaks ? `${advancedData.swallowingAnalysis.peaks.length} 个峰值` : 'N/A'}<br/>
-                    smoothedData: {advancedData?.swallowingAnalysis?.smoothedData ? `${advancedData.swallowingAnalysis.smoothedData.length} 帧` : 'N/A'}
-                  </div>
-                  <div>
-                    <strong>基线信息:</strong><br/>
-                    {advancedData?.swallowingAnalysis?.smoothedData ? 
-                      `全局最低值: ${Math.min(...advancedData.swallowingAnalysis.smoothedData).toFixed(3)}` : 'N/A'}<br/>
-                    {advancedData?.swallowingAnalysis?.smoothedData ? 
-                      `全局最高值: ${Math.max(...advancedData.swallowingAnalysis.smoothedData).toFixed(3)}` : 'N/A'}
-                  </div>
-                  <div>
-                    <strong>周期连续性:</strong><br/>
-                    {advancedData?.swallowingAnalysis?.cycles ? 
-                      advancedData.swallowingAnalysis.cycles.map((cycle: any, idx: number) => 
-                        `周期${cycle.cycleNumber}: ${cycle.startFrame}→${cycle.endFrame}`
-                      ).join(', ') : 'N/A'}
-                  </div>
-                  <div>
-                    <strong>医学参数状态:</strong><br/>
-                    {advancedData?.swallowingAnalysis?.cycles ? 
-                      advancedData.swallowingAnalysis.cycles.map((cycle: any, idx: number) => 
-                        `周期${cycle.cycleNumber}: PCR=${cycle.PCR?.toFixed(3) || 'N/A'}${cycle.PCR_hasNegativeValues ? '(已处理负值)' : ''}`
-                      ).join(', ') : 'N/A'}
-                  </div>
-                  <div>
-                    <strong>误吸误咽状态:</strong><br/>
-                    {advancedData?.swallowingAnalysis?.cycles ? 
-                      advancedData.swallowingAnalysis.cycles.map((cycle: any, idx: number) => 
-                        `周期${cycle.cycleNumber}: ${cycle.aspirationRisk ? '⚠️有风险' : '✅无风险'}`
-                      ).join(', ') : 'N/A'}
-                  </div>
-                  <div>
-                    <strong>HYB状态:</strong><br/>
-                    {advancedData?.swallowingAnalysis?.cycles ? 
-                      advancedData.swallowingAnalysis.cycles.map((cycle: any, idx: number) => 
-                        `周期${cycle.cycleNumber}: ${cycle.HYB || 'N/A'}`
-                      ).join(', ') : 'N/A'}
-                  </div>
-                  <div>
-                    <strong>UESmax状态:</strong><br/>
-                    {advancedData?.swallowingAnalysis?.cycles ? 
-                      advancedData.swallowingAnalysis.cycles.map((cycle: any, idx: number) => 
-                        `周期${cycle.cycleNumber}: ${cycle.UES_peakFrame || 'N/A'}`
-                      ).join(', ') : 'N/A'}
-                  </div>
-                  <div>
-                    <strong>UESO状态:</strong><br/>
-                    {advancedData?.swallowingAnalysis?.cycles ? 
-                      advancedData.swallowingAnalysis.cycles.map((cycle: any, idx: number) => 
-                        `周期${cycle.cycleNumber}: ${cycle.UESO || 'N/A'}`
-                      ).join(', ') : 'N/A'}
-                  </div>
-                  <div>
-                    <strong>UESC状态:</strong><br/>
-                    {advancedData?.swallowingAnalysis?.cycles ? 
-                      advancedData.swallowingAnalysis.cycles.map((cycle: any, idx: number) => 
-                        `周期${cycle.cycleNumber}: ${cycle.UESC || 'N/A'}`
-                      ).join(', ') : 'N/A'}
-                  </div>
-                  <div>
-                    <strong>LVC状态:</strong><br/>
-                    {advancedData?.swallowingAnalysis?.cycles ? 
-                      advancedData.swallowingAnalysis.cycles.map((cycle: any, idx: number) => 
-                        `周期${cycle.cycleNumber}: ${cycle.LVC || 'N/A'}`
-                      ).join(', ') : 'N/A'}
-                  </div>
-                  <div>
-                    <strong>LVCoff状态:</strong><br/>
-                    {advancedData?.swallowingAnalysis?.cycles ? 
-                      advancedData.swallowingAnalysis.cycles.map((cycle: any, idx: number) => 
-                        `周期${cycle.cycleNumber}: ${cycle.LVCoff || 'N/A'}`
-                      ).join(', ') : 'N/A'}
-                  </div>
-                </div>
-              </div>
+              {/* 调试信息面板已隐藏 */}
 
               {/* 吞咽周期分析表格 - 放在下面 */}
               {advancedData.swallowingAnalysis && (
